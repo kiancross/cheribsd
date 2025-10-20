@@ -907,11 +907,11 @@ umtx_key_get(const void * __capability addr, int type, int share,
 	if (share == THREAD_SHARE) {
 		key->shared = 0;
 		key->info.private.vs = td->td_proc->p_vmspace;
-		key->info.private.addr = (__cheri_addr ptraddr_t)addr;
+		key->info.private.addr = (ptraddr_t)addr;
 	} else {
 		MPASS(share == PROCESS_SHARE || share == AUTO_SHARE);
 		map = &td->td_proc->p_vmspace->vm_map;
-		if (vm_map_lookup(&map, (__cheri_addr vm_offset_t)addr,
+		if (vm_map_lookup(&map, (vm_offset_t)addr,
 		    VM_PROT_WRITE, &entry, &key->info.shared.object, &pindex,
 		    &prot, &wired) != KERN_SUCCESS) {
 			return (EFAULT);
@@ -921,13 +921,13 @@ umtx_key_get(const void * __capability addr, int type, int share,
 		    (share == AUTO_SHARE &&
 		     VM_INHERIT_SHARE == entry->inheritance)) {
 			key->shared = 1;
-			key->info.shared.offset = (__cheri_addr vm_offset_t)addr -
+			key->info.shared.offset = (vm_offset_t)addr -
 			    entry->start + entry->offset;
 			vm_object_reference(key->info.shared.object);
 		} else {
 			key->shared = 0;
 			key->info.private.vs = td->td_proc->p_vmspace;
-			key->info.private.addr = (__cheri_addr ptraddr_t)addr;
+			key->info.private.addr = (ptraddr_t)addr;
 		}
 		vm_map_lookup_done(map, entry);
 	}
@@ -3996,7 +3996,7 @@ __umtx_op_wait(struct thread *td, struct _umtx_op_args *uap,
 		tm_p = NULL;
 	else {
 		error = ops->copyin_umtx_time(
-		    uap->uaddr2, (__cheri_addr size_t)uap->uaddr1, &timeout);
+		    uap->uaddr2, (size_t)uap->uaddr1, &timeout);
 		if (error != 0)
 			return (error);
 		tm_p = &timeout;
@@ -4015,7 +4015,7 @@ __umtx_op_wait_uint(struct thread *td, struct _umtx_op_args *uap,
 		tm_p = NULL;
 	else {
 		error = ops->copyin_umtx_time(
-		    uap->uaddr2, (__cheri_addr size_t)uap->uaddr1, &timeout);
+		    uap->uaddr2, (size_t)uap->uaddr1, &timeout);
 		if (error != 0)
 			return (error);
 		tm_p = &timeout;
@@ -4034,7 +4034,7 @@ __umtx_op_wait_uint_private(struct thread *td, struct _umtx_op_args *uap,
 		tm_p = NULL;
 	else {
 		error = ops->copyin_umtx_time(
-		    uap->uaddr2, (__cheri_addr size_t)uap->uaddr1, &timeout);
+		    uap->uaddr2, (size_t)uap->uaddr1, &timeout);
 		if (error != 0)
 			return (error);
 		tm_p = &timeout;
@@ -4129,7 +4129,7 @@ __umtx_op_lock_umutex(struct thread *td, struct _umtx_op_args *uap,
 		tm_p = NULL;
 	else {
 		error = ops->copyin_umtx_time(
-		    uap->uaddr2, (__cheri_addr size_t)uap->uaddr1, &timeout);
+		    uap->uaddr2, (size_t)uap->uaddr1, &timeout);
 		if (error != 0)
 			return (error);
 		tm_p = &timeout;
@@ -4157,7 +4157,7 @@ __umtx_op_wait_umutex(struct thread *td, struct _umtx_op_args *uap,
 		tm_p = NULL;
 	else {
 		error = ops->copyin_umtx_time(
-		    uap->uaddr2, (__cheri_addr size_t)uap->uaddr1, &timeout);
+		    uap->uaddr2, (size_t)uap->uaddr1, &timeout);
 		if (error != 0)
 			return (error);
 		tm_p = &timeout;
@@ -4236,7 +4236,7 @@ __umtx_op_rw_rdlock(struct thread *td, struct _umtx_op_args *uap,
 		error = do_rw_rdlock(td, uap->obj, uap->val, 0);
 	} else {
 		error = ops->copyin_umtx_time(uap->uaddr2,
-		   (__cheri_addr size_t)uap->uaddr1, &timeout);
+		   (size_t)uap->uaddr1, &timeout);
 		if (error != 0)
 			return (error);
 		error = do_rw_rdlock(td, uap->obj, uap->val, &timeout);
@@ -4256,7 +4256,7 @@ __umtx_op_rw_wrlock(struct thread *td, struct _umtx_op_args *uap,
 		error = do_rw_wrlock(td, uap->obj, 0);
 	} else {
 		error = ops->copyin_umtx_time(uap->uaddr2,
-		   (__cheri_addr size_t)uap->uaddr1, &timeout);
+		   (size_t)uap->uaddr1, &timeout);
 		if (error != 0)
 			return (error);
 
@@ -4286,7 +4286,7 @@ __umtx_op_sem_wait(struct thread *td, struct _umtx_op_args *uap,
 		tm_p = NULL;
 	else {
 		error = ops->copyin_umtx_time(
-		    uap->uaddr2, (__cheri_addr size_t)uap->uaddr1, &timeout);
+		    uap->uaddr2, (size_t)uap->uaddr1, &timeout);
 		if (error != 0)
 			return (error);
 		tm_p = &timeout;
@@ -4324,7 +4324,7 @@ __umtx_op_sem2_wait(struct thread *td, struct _umtx_op_args *uap,
 		uasize = 0;
 		tm_p = NULL;
 	} else {
-		uasize = (__cheri_addr size_t)uap->uaddr1;
+		uasize = (size_t)uap->uaddr1;
 		error = ops->copyin_umtx_time(uap->uaddr2, uasize, &timeout);
 		if (error != 0)
 			return (error);
@@ -4628,7 +4628,7 @@ umtx_shm_alive(struct thread *td, void * __capability addr)
 	boolean_t wired;
 
 	map = &td->td_proc->p_vmspace->vm_map;
-	res = vm_map_lookup(&map, (__cheri_addr ptraddr_t)addr, VM_PROT_READ, &entry,
+	res = vm_map_lookup(&map, (ptraddr_t)addr, VM_PROT_READ, &entry,
 	    &object, &pindex, &prot, &wired);
 	if (res != KERN_SUCCESS)
 		return (EFAULT);
