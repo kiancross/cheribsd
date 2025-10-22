@@ -820,7 +820,7 @@ linux_copyin(const void * __capability uaddr, void *kaddr, size_t len)
 	if (linux_remap_address(__DECONST(void * __capability *, &uaddr), len)) {
 		if (uaddr == NULL)
 			return (-EFAULT);
-		memcpy(kaddr, (__cheri_fromcap const void *)uaddr, len);
+		memcpy(kaddr, (const void *)uaddr, len);
 		return (0);
 	}
 	return (-copyin(uaddr, kaddr, len));
@@ -832,7 +832,7 @@ linux_copyout(const void *kaddr, void * __capability uaddr, size_t len)
 	if (linux_remap_address(&uaddr, len)) {
 		if (uaddr == NULL)
 			return (-EFAULT);
-		memcpy((__cheri_fromcap void *)uaddr, kaddr, len);
+		memcpy((void *)uaddr, kaddr, len);
 		return (0);
 	}
 	return (-copyout(kaddr, uaddr, len));
@@ -1437,8 +1437,7 @@ linux_file_read(struct file *file, struct uio *uio, struct ucred *active_cred,
 	linux_set_current(td);
 	linux_get_fop(filp, &fop, &ldev);
 	if (fop->read != NULL) {
-		bytes = OPW(file, td, fop->read(filp,
-		    (__cheri_fromcap void *)uio->uio_iov->iov_base,
+		bytes = OPW(file, td, fop->read(filp, uio->uio_iov->iov_base,
 		    uio->uio_iov->iov_len, &uio->uio_offset));
 		if (bytes >= 0) {
 			IOVEC_ADVANCE(uio->uio_iov, bytes);
@@ -1476,8 +1475,7 @@ linux_file_write(struct file *file, struct uio *uio, struct ucred *active_cred,
 	linux_set_current(td);
 	linux_get_fop(filp, &fop, &ldev);
 	if (fop->write != NULL) {
-		bytes = OPW(file, td, fop->write(filp,
-		    (__cheri_fromcap void *)uio->uio_iov->iov_base,
+		bytes = OPW(file, td, fop->write(filp, uio->uio_iov->iov_base,
 		    uio->uio_iov->iov_len, &uio->uio_offset));
 		if (bytes >= 0) {
 			IOVEC_ADVANCE(uio->uio_iov, bytes);
