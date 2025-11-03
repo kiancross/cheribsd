@@ -393,7 +393,7 @@ int32_t	fuword32(volatile const void *base);
 int64_t	fuword64(volatile const void *base);
 #if __has_feature(capabilities)
 int __result_use_check fuecap(volatile const void *base,
-    intcap_t *val);
+    intptr_t *val);
 #define	fueptr			fuecap
 #else
 #define	fueptr(base, val)	fueword((base), (long *)(val))
@@ -416,7 +416,7 @@ int __result_use_or_ignore_check suword64(volatile void *base,
     int64_t word);
 #if __has_feature(capabilities)
 int __result_use_or_ignore_check sucap(volatile const void *base,
-    intcap_t val);
+    intptr_t val);
 #define	suptr			sucap
 #else
 #define	suptr			suword

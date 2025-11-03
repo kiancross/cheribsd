@@ -2364,11 +2364,11 @@ allocated:
 static void
 cheri_restore_tag(void **cp)
 {
-	uintcap_t cap;
+	uintptr_t cap;
 	void *newcap;
 	void *sealcap;
 
-	cap = (uintcap_t)*cp;
+	cap = (uintptr_t)*cp;
 
 	newcap = cheri_cap_build(swap_restore_cap, cap);
 	sealcap = cheri_type_copy(swap_restore_cap, cap);
