@@ -3627,7 +3627,7 @@ freebsd32___specialfd(struct thread *td,
 		return (EINVAL);
 	}
 
-	return (user_specialfd(td, args->type, req, args->len));
+	return (user___specialfd(td, args->type, req, args->len));
 }
 
 int
