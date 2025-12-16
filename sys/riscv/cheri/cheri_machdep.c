@@ -48,9 +48,9 @@ void *kernel_root_cap = (void *)(intcap_t)-1;
 #endif
 
 void
-cheri_init_capabilities(void * __capability kroot)
+cheri_init_capabilities(void *kroot)
 {
-	void * __capability ctemp;
+	void *ctemp;
 
 	ctemp = cheri_address_set(kroot, CHERI_SEALCAP_KERNEL_BASE);
 	ctemp = cheri_bounds_set(ctemp, CHERI_SEALCAP_KERNEL_LENGTH);

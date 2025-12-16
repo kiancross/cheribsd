@@ -539,12 +539,12 @@ void dump_Elf_Rela(Obj_Entry *, const Elf_Rela *, u_long);
 	(cheri_perms_clear((obj)->relocbase, CAP_RELOC_REMOVE_PERMS))
 #elif __has_feature(capabilities)
 #define pcc_cap(obj, offset)					\
-	(const char * __capability)cheri_bounds_set(		\
+	(const char *)cheri_bounds_set(		\
 	    cheri_address_set(cheri_pcc_get(),			\
 	        (ptraddr_t)(uintptr_t)obj->mapbase + (offset)),	\
 	    obj->mapsize)
 #define get_datasegment_cap(obj)				\
-	(char * __capability)cheri_bounds_set(			\
+	(char *)cheri_bounds_set(			\
 	    cheri_address_set(cheri_ddc_get(),		\
 	        (ptraddr_t)(uintptr_t)obj->mapbase),		\
 	    obj->mapsize)

@@ -1638,7 +1638,7 @@ if_getgroup(struct ifgroupreq *ifgr, struct ifnet *ifp)
 {
 	int			 len, error;
 	struct ifg_list		*ifgl;
-	struct ifg_req		 ifgrq, * __capability ifgp;
+	struct ifg_req		 ifgrq, *ifgp;
 
 	NET_EPOCH_ASSERT();
 
@@ -1674,7 +1674,7 @@ if_getgroupmembers(struct ifgroupreq *ifgr)
 {
 	struct ifg_group	*ifg;
 	struct ifg_member	*ifgm;
-	struct ifg_req		 ifgrq, * __capability ifgp;
+	struct ifg_req		 ifgrq, *ifgp;
 	int			 len, error;
 
 	IFNET_RLOCK();
@@ -2338,7 +2338,7 @@ ifunit(const char *name)
 	return (ifp);
 }
 
-void * __capability
+void *
 ifr_buffer_get_buffer(u_long cmd, void *data)
 {
 	union ifreq_union *ifrup;
@@ -2457,7 +2457,7 @@ ifr_buffer_set_length(u_long cmd, void *data, size_t len)
 	}
 }
 
-void * __capability
+void *
 ifr_data_get_ptr(u_long cmd, void *ifrp)
 {
 	union ifreq_union *ifrup;
