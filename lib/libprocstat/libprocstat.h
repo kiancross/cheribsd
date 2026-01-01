@@ -39,6 +39,7 @@
 #endif
 #include <sys/caprights.h>
 #include <cheri/c18n.h>
+#include <cheri/cheri_mrs.h>
 
 /*
  * Vnode types.
@@ -223,6 +224,8 @@ int	procstat_getcompartments(struct procstat *procstat,
     size_t *ncomparts);
 struct filestat_list	*procstat_getfiles(struct procstat *procstat,
     struct kinfo_proc *kp, int mmapped);
+int	procstat_getmrs(struct procstat *procstat, struct kinfo_proc *kp,
+    struct cheri_mrs_stats *stats);
 struct kinfo_proc	*procstat_getprocs(struct procstat *procstat,
     int what, int arg, unsigned int *count);
 int	procstat_get_pipe_info(struct procstat *procstat, struct filestat *fst,

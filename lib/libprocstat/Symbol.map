@@ -55,6 +55,7 @@ FBSD_1.7 {
 };
 
 FBSD_1.8 {
+	 procstat_getmrs;
 	 procstat_getrlimitusage;
 	 procstat_freerlimitusage;
 };

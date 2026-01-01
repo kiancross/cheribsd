@@ -15,6 +15,7 @@ SRCS=	procstat.c		\
 	procstat_cs.c		\
 	procstat_files.c	\
 	procstat_kstack.c	\
+	procstat_mrs.c		\
 	procstat_penv.c		\
 	procstat_ptlwpinfo.c	\
 	procstat_pwdx.c		\
@@ -24,6 +25,8 @@ SRCS=	procstat.c		\
 	procstat_sigs.c		\
 	procstat_threads.c	\
 	procstat_vm.c
+
+SRCS+=	cheri_helpers.c
 
 MLINKS+=	procstat.1 pargs.1
 MLINKS+=	procstat.1 penv.1

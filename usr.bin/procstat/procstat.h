@@ -69,6 +69,7 @@ void	procstat_cs(struct procstat *prstat, struct kinfo_proc *kipp);
 void	procstat_env(struct procstat *prstat, struct kinfo_proc *kipp);
 void	procstat_files(struct procstat *prstat, struct kinfo_proc *kipp);
 void	procstat_kstack(struct procstat *prstat, struct kinfo_proc *kipp);
+void	procstat_mrs(struct procstat *prstat, struct kinfo_proc *kipp);
 void	procstat_rlimitusage(struct procstat *procstat,
 	    struct kinfo_proc *kipp);
 void	procstat_pargs(struct procstat *prstat, struct kinfo_proc *kipp);
@@ -83,5 +84,16 @@ void	procstat_sigs(struct procstat *prstat, struct kinfo_proc *kipp);
 void	procstat_threads(struct procstat *prstat, struct kinfo_proc *kipp);
 void	procstat_threads_sigs(struct procstat *prstat, struct kinfo_proc *kipp);
 void	procstat_vm(struct procstat *prstat, struct kinfo_proc *kipp);
+
+/*
+ * Helper functions from procstat_cheri.c to be used in other CHERI-centric
+ * modes.
+ */
+const char *get_quarantining(struct procstat *procstat,
+	    struct kinfo_proc *kipp);
+const char *get_revoker_epoch(struct procstat *procstat,
+	    struct kinfo_proc *kipp);
+const char *get_revoker_state(struct procstat *procstat,
+	    struct kinfo_proc *kipp);
 
 #endif /* !PROCSTAT_H */
