@@ -96,8 +96,14 @@ freebsd64_mmap(struct thread *td, struct freebsd64_mmap_args *uap)
 		.mr_fd = uap->fd,
 		.mr_pos = uap->pos,
 #ifdef __CHERI_PURE_CAPABILITY__
-		/* Needed for fixed mappings */
-		.mr_source_cap = userspace_root_cap
+		/*
+		 * Constrain fixed mappings to the current thread's DDC.
+		 * This is nominally a behavior change vs restricting to
+		 * the vmspace map's capability, but that is only true
+		 * of programs that manipulate DDC and no legacy software
+		 * will do so.
+		 */
+		.mr_source_cap = __USER_DDC,
 #endif
 	    }));
 }
@@ -115,8 +121,8 @@ freebsd6_freebsd64_mmap(struct thread *td,
 		.mr_fd = uap->fd,
 		.mr_pos = uap->pos,
 #ifdef __CHERI_PURE_CAPABILITY__
-		/* Needed for fixed mappings */
-		.mr_source_cap = userspace_root_cap
+		/* See comment in freebsd64_mmap. */
+		.mr_source_cap = __USER_DDC,
 #endif
 	    }));
 }
