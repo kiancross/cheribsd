@@ -509,8 +509,14 @@ kern_shmat_locked(struct thread *td, int shmid,
 			/* As with mmap, untagged implies exclusive. */
 			if ((shmflg & SHM_REMAP) != 0)
 				return (EINVAL);
+#ifdef __CHERI_PURE_CAPABILITY__
+			shmaddr = (void *)cheri_address_set(
+			    vm_map_rootcap(&td->td_proc->p_vmspace->vm_map),
+			    attach_va);
+#else
 			shmaddr = cheri_address_set(userspace_root_cap,
 			    attach_va);
+#endif
 		}
 #endif
 		if ((shmflg & SHM_REMAP) != 0)
@@ -536,7 +542,14 @@ kern_shmat_locked(struct thread *td, int shmid,
 			    CHERI_REPRESENTABLE_ALIGNMENT(size) < (1UL << 12) ?
 			    VMFS_OPTIMAL_SPACE :
 			    VMFS_ALIGNED_SPACE(CHERI_ALIGN_SHIFT(size));
-			shmaddr = cheri_address_set(userspace_root_cap, attach_va);
+#ifdef __CHERI_PURE_CAPABILITY__
+			shmaddr = (void *)cheri_address_set(
+			    vm_map_rootcap(&td->td_proc->p_vmspace->vm_map),
+			    attach_va);
+#else
+			shmaddr = cheri_address_set(userspace_root_cap,
+			    attach_va);
+#endif
 		} else
 #endif
 			find_space = VMFS_OPTIMAL_SPACE;
