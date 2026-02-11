@@ -120,7 +120,7 @@ struct sysentvec {
 	int		sv_minsigstksz;	/* minimum signal stack size */
 	vm_offset_t	sv_minuser;	/* VM_MIN_ADDRESS */
 	vm_offset_t	sv_maxuser;	/* VM_MAXUSER_ADDRESS */
-#ifdef __CHERI__
+#if __has_feature(capabilities)
 	uintcap_t	sv_vmspace_cap;
 #endif
 	vm_offset_t	sv_usrstack;	/* USRSTACK */

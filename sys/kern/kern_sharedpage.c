@@ -369,7 +369,7 @@ exec_sysvec_init(void *param)
 	}
 #endif
 
-#ifdef __CHERI__
+#if __has_feature(capabilities)
 	cheri_sysvec_init(sv);
 #endif
 }
@@ -387,7 +387,7 @@ exec_sysvec_init_secondary(struct sysentvec *sv, struct sysentvec *sv2)
 	sv2->sv_shared_page_obj = sv->sv_shared_page_obj;
 	sv2->sv_sigcode_offset = sv->sv_sigcode_offset;
 	sv2->sv_vdso_offset = sv->sv_vdso_offset;
-#ifdef __CHERI__
+#if __has_feature(capabilities)
 	/* Need to compute a new sv_vmspace_cap */
 	cheri_sysvec_init(sv2);
 #endif
