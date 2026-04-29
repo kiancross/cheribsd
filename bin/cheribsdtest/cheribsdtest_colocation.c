@@ -2,11 +2,19 @@
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2022 SRI International
+ * Copyright (c) 2026 Kian Cross
  *
  * This software was developed by SRI International and the University of
  * Cambridge Computer Laboratory (Department of Computer Science and
  * Technology) under Defense Advanced Research Projects Agency (DARPA)
  * Contract No. HR001122C0110 ("ETC").
+ *
+ * Portions of this software were developed by Kian Cross at the
+ * University of Cambridge Computer Laboratory (Department of Computer
+ * Science and Technology) under Defense Advanced Research Projects
+ * Agency / Air Force Research Laboratory (DARPA/AFRL) Contract
+ * No. FA8750-24-C-B047 ("DEC"), with additional support from a grant
+ * from Google, Inc., and the Jesus College Embiricos Trust Scholarship.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -273,6 +281,182 @@ CHERIBSDTEST(colocation_coaccept_slow,
 		}
 	}
 }
+
+/* Excluded under c18n: a separate cocall fast-path issue causes SIGILL. */
+#ifndef CHERIBSD_C18N_TESTS
+
+static void *
+wait_for_service(const char *service, pid_t worker)
+{
+	void *target;
+	int error;
+
+	if (cosetup(COSETUP_COCALL) != 0)
+		cheribsdtest_failure_err("cosetup");
+
+	/*
+	 * Spin until the worker has registered the service.  The
+	 * waitpid call escapes the loop if the worker dies first;
+	 * worker liveness is the only cheap signal we have without
+	 * a pipe/socket synchronisation channel.
+	 *
+	 * XXX: set a timeout?
+	 */
+	while ((error = colookup(service, &target)) != 0 &&
+	    errno == ESRCH && waitpid(worker, NULL, WNOHANG) == 0)
+		;
+
+	if (error != 0)
+		cheribsdtest_failure_err("colookup");
+
+	return (target);
+}
+
+static void
+cocall_or_fail(void *target, void *send_buf, size_t send_size,
+    void *recv_buf, size_t recv_size)
+{
+	if (cocall(target, send_buf, send_size, recv_buf, recv_size) < 0)
+		cheribsdtest_failure_err("cocall");
+}
+
+static void
+burn_cpu(unsigned long iterations)
+{
+	unsigned long x = 1;
+
+	for (unsigned long i = 0; i < iterations; i++) {
+		x = x * 1664525 + 1013904223;
+
+		/* Prevent the compiler from eliding the loop. */
+		asm volatile("" : "+r"(x));
+	}
+}
+
+static double
+user_cpu_time_of(pid_t pid)
+{
+	struct procstat *ps;
+	struct kinfo_proc *kp;
+	struct rusage *ru;
+	unsigned int count;
+	double cpu;
+
+	ps = procstat_open_sysctl();
+	if (ps == NULL)
+		return (-1);
+
+	kp = procstat_getprocs(ps, KERN_PROC_PID, pid, &count);
+	if (kp == NULL || count == 0) {
+		procstat_close(ps);
+		return (-1);
+	}
+
+	ru = &kp[0].ki_rusage;
+	cpu = ru->ru_utime.tv_sec + ru->ru_utime.tv_usec * 1e-6;
+
+	procstat_freeprocs(ps, kp);
+	procstat_close(ps);
+
+	return (cpu);
+}
+
+#define	COLOCATION_ACCOUNTING_SERVICE	"colocation_accounting"
+
+/*
+ * About 33 ms of user CPU time on Morello, or about four statclock
+ * ticks.  The kernel splits run time into user and system time by
+ * counting ticks, so a burn shorter than a tick can show no user time
+ * even when the kernel charges it to the callee.  The ticks beyond the
+ * first are a safety margin.
+ */
+#define	COLOCATION_ACCOUNTING_BURN_ITERATIONS	20000000UL
+
+static void
+colocation_accounting_worker(void)
+{
+	intcap_t buf = 0;
+	ssize_t received;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_ACCOUNTING_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	received = coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf));
+	if (received < 0)
+		err(EX_OSERR, "coaccept");
+
+	burn_cpu(COLOCATION_ACCOUNTING_BURN_ITERATIONS);
+
+	received = coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf));
+	if (received < 0)
+		err(EX_OSERR, "coaccept");
+
+	errx(EX_SOFTWARE, "second coaccept returned");
+}
+
+CHERIBSDTEST(colocation_accounting,
+    "CPU time a callee burns during a cocall is charged to the callee, not "
+    "the caller",
+    .ct_flags = CT_FLAG_SLOW,
+    .ct_child_func = colocation_accounting_worker,
+    .ct_xfail_reason =
+	"CPU time a callee burns on the caller's thread is charged to the "
+	"caller")
+{
+	void *target;
+	double caller_start, callee_start, caller_end, callee_end;
+	double caller_delta, callee_delta;
+	intcap_t buf = 0;
+	pid_t pid, self_pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		self_pid = getpid();
+
+		target = wait_for_service(COLOCATION_ACCOUNTING_SERVICE, pid);
+
+		caller_start = user_cpu_time_of(self_pid);
+		callee_start = user_cpu_time_of(pid);
+
+		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+
+		caller_end = user_cpu_time_of(self_pid);
+		callee_end = user_cpu_time_of(pid);
+
+		(void)kill(pid, SIGKILL);
+		(void)waitpid(pid, NULL, 0);
+
+		caller_delta = caller_end - caller_start;
+		callee_delta = callee_end - callee_start;
+
+		/*
+		 * The 1 ms floor stops a pass when neither delta is large
+		 * enough to measure.  Once the kernel charges the burn to
+		 * the callee, the caller gains only the user time of its
+		 * stats lookups: about 20 us on Morello, well under 1% of
+		 * the burn.  So the 100x ratio fails only a fix that still
+		 * charges the caller over 1% of the burn.
+		 */
+		if (callee_delta > 0.001 && callee_delta > caller_delta * 100) {
+			cheribsdtest_success();
+		} else {
+			cheribsdtest_failure_errx(
+			    "CPU time not correctly accounted: "
+			    "caller=%.6fs callee=%.6fs",
+			    caller_delta, callee_delta);
+		}
+	}
+}
+
+#endif /* !CHERIBSD_C18N_TESTS */
 #endif
 
 static void
