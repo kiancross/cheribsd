@@ -2,11 +2,19 @@
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Copyright (c) 2022 SRI International
+ * Copyright (c) 2026 Kian Cross
  *
  * This software was developed by SRI International and the University of
  * Cambridge Computer Laboratory (Department of Computer Science and
  * Technology) under Defense Advanced Research Projects Agency (DARPA)
  * Contract No. HR001122C0110 ("ETC").
+ *
+ * Portions of this software were developed by Kian Cross at the
+ * University of Cambridge Computer Laboratory (Department of Computer
+ * Science and Technology) under Defense Advanced Research Projects
+ * Agency / Air Force Research Laboratory (DARPA/AFRL) Contract
+ * No. FA8750-24-C-B047 ("DEC"), with additional support from a grant
+ * from Google, Inc., and the Jesus College Embiricos Trust Scholarship.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -273,6 +281,156 @@ CHERIBSDTEST(colocation_coaccept_slow,
 		}
 	}
 }
+
+/* Excluded under c18n: a separate cocall fast-path issue causes SIGILL. */
+#ifndef CHERIBSD_C18N_TESTS
+
+static void
+burn_cpu(unsigned long iters)
+{
+	unsigned long x = 1;
+
+	for (unsigned long i = 0; i < iters; i++) {
+		x = x * 1664525 + 1013904223;
+
+		/* Prevent the compiler from eliding the loop. */
+		asm volatile("" : "+r"(x));
+	}
+}
+
+static double
+user_cpu_time_for_pid(pid_t pid)
+{
+	struct procstat *ps;
+	struct kinfo_proc *kp;
+	struct rusage *ru;
+	unsigned int cnt;
+	double cpu;
+
+	ps = procstat_open_sysctl();
+	if (ps == NULL)
+		return (-1);
+
+	kp = procstat_getprocs(ps, KERN_PROC_PID, pid, &cnt);
+	if (kp == NULL || cnt == 0) {
+		procstat_close(ps);
+		return (-1);
+	}
+
+	ru = &kp[0].ki_rusage;
+	cpu = ru->ru_utime.tv_sec + ru->ru_utime.tv_usec * 1e-6;
+
+	procstat_freeprocs(ps, kp);
+	procstat_close(ps);
+
+	return (cpu);
+}
+
+#define	COLOCATION_ACCOUNTING_SERVICE	"colocation_accounting"
+
+static void
+colocation_accounting_worker(void)
+{
+	intcap_t buf = 0;
+	ssize_t received;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_ACCOUNTING_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	received = coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf));
+	if (received < 0)
+		err(EX_OSERR, "coaccept");
+
+	/*
+	 * Tuned on Morello: long enough to register on the scheduler
+	 * tick, short enough to keep the test fast.
+	 */
+	burn_cpu(20000000);
+
+	received = coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf));
+	if (received < 0)
+		err(EX_OSERR, "coaccept");
+
+	err(EX_SOFTWARE, "Second coaccept returned.");
+}
+
+CHERIBSDTEST(colocation_accounting,
+    "Check that work done in a cocall is accounted to the correct coprocess",
+    .ct_flags = CT_FLAG_SLOW,
+    .ct_child_func = colocation_accounting_worker,
+    .ct_xfail_reason =
+	"Borrowing callee CPU time is not yet attributed to the callee process by the kernel")
+{
+	void *target;
+	double caller_start, callee_start, caller_end, callee_end;
+	double caller_delta, callee_delta;
+	intcap_t buf = 0;
+	pid_t pid, self_pid;
+	int error;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		self_pid = getpid();
+
+		error = cosetup(COSETUP_COCALL);
+		if (error != 0)
+			cheribsdtest_failure_err("cosetup");
+
+		/*
+		 * We need to wait for the child to coregister.  Right
+		 * now the best we can do is spin unless we use a pipe/socket
+		 * to synchronize.
+		 *
+		 * XXX: set a timeout?
+		 */
+		while ((error = colookup(COLOCATION_ACCOUNTING_SERVICE,
+		    &target)) != 0 &&
+		    errno == ESRCH && waitpid(pid, NULL, WNOHANG) == 0)
+			;
+		if (error != 0)
+			cheribsdtest_failure_err("colookup");
+
+		caller_start = user_cpu_time_for_pid(self_pid);
+		callee_start = user_cpu_time_for_pid(pid);
+
+		if (cocall(target, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			cheribsdtest_failure_err("cocall");
+
+		caller_end = user_cpu_time_for_pid(self_pid);
+		callee_end = user_cpu_time_for_pid(pid);
+
+		caller_delta = caller_end - caller_start;
+		callee_delta = callee_end - callee_start;
+
+		/*
+		 * Pass if the callee accumulated clearly more user CPU
+		 * time than the caller during the cocall.  The 1ms floor
+		 * guards against false positives when both samples land
+		 * below procstat's tick resolution; the 100x ratio
+		 * confirms the kernel attributed the burn_cpu work to
+		 * the callee process even though the callee ran on the
+		 * caller's borrowed kernel thread.
+		 */
+		if (callee_delta > 0.001 && callee_delta > caller_delta * 100) {
+			cheribsdtest_success();
+		} else {
+			cheribsdtest_failure_errx(
+			    "CPU time not correctly accounted: "
+			    "caller=%.6fs callee=%.6fs",
+			    caller_delta, callee_delta);
+		}
+	}
+}
+
+#endif /* !CHERIBSD_C18N_TESTS */
 #endif
 
 static void
