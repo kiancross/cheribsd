@@ -431,6 +431,239 @@ CHERIBSDTEST(colocation_accounting,
 }
 
 #endif /* !CHERIBSD_C18N_TESTS */
+
+#if defined(__aarch64__)
+/*
+ * Tests for callee-saved register preservation across the cocall
+ * fast-path domain transition.  Each test loads marker values into
+ * a set of registers, drives a cocall, and verifies what survived.
+ */
+
+#define	COLOCATION_REGTEST_SERVICE	"colocation_register"
+
+static void
+colocation_register_worker(void)
+{
+	intcap_t buf = 0;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGTEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf,
+		    sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+	}
+}
+
+static void *
+wait_for_service(const char *service, pid_t worker)
+{
+	void *target;
+	int error;
+
+	if (cosetup(COSETUP_COCALL) != 0)
+		cheribsdtest_failure_err("cosetup");
+
+	/*
+	 * Spin until the worker has registered the service.  The
+	 * waitpid call escapes the loop if the worker dies first;
+	 * worker liveness is the only cheap signal we have without
+	 * a pipe/socket synchronisation channel.
+	 *
+	 * XXX: set a timeout?
+	 */
+	while ((error = colookup(service, &target)) != 0 &&
+	    errno == ESRCH && waitpid(worker, NULL, WNOHANG) == 0)
+		;
+
+	if (error != 0)
+		cheribsdtest_failure_err("colookup");
+
+	return (target);
+}
+
+static void
+cocall_or_fail(void *target, void *send_buf, size_t send_size,
+    void *recv_buf, size_t recv_size)
+{
+	if (cocall(target, send_buf, send_size, recv_buf, recv_size) < 0)
+		cheribsdtest_failure_err("cocall");
+}
+
+/* Excluded under c18n: a separate cocall fast-path issue causes SIGILL. */
+#ifndef CHERIBSD_C18N_TESTS
+
+/* Defined in arm64/cheribsdtest_colocation_asm.S. */
+void	gp_register_check_via_cocall(void *target,
+	    void * const *markers, void **vals);
+
+void	gp_register_check_via_coaccept(void *cookiep,
+	    void * const *markers, void **vals);
+
+#define	GP_MARKER_COUNT		10	/* c19-c28 */
+#define	GP_MARKER_STRIDE	16
+#define	GP_MARKER_BUF_SIZE	(GP_MARKER_COUNT * GP_MARKER_STRIDE)
+
+/*
+ * Build GP_MARKER_COUNT distinct tagged-capability markers backed by
+ * buf[].  The markers differ in address (GP_MARKER_STRIDE apart) and
+ * all carry buf's tag, bounds and permissions, so the comparison
+ * checks the whole capability, not just the address.  buf must span
+ * GP_MARKER_BUF_SIZE bytes.
+ */
+static void
+build_gp_cap_markers(void *markers[GP_MARKER_COUNT], char *buf)
+{
+	int i;
+
+	for (i = 0; i < GP_MARKER_COUNT; i++)
+		markers[i] = &buf[i * GP_MARKER_STRIDE];
+}
+
+/*
+ * Compare an observed snapshot of c19-c28 against the markers using
+ * exact tag/bounds/perms/address equality.  across is a short phrase
+ * describing the round-trip path under test (e.g., "cocall" /
+ * "coaccept resumption") that gets spliced into the failure message.
+ */
+static void
+check_caps_match(void * const want[GP_MARKER_COUNT],
+    void * const got[GP_MARKER_COUNT], const char *across)
+{
+	int i;
+
+	for (i = 0; i < GP_MARKER_COUNT; i++) {
+		CHERIBSDTEST_VERIFY2(__builtin_cheri_equal_exact(got[i], want[i]),
+		    "c%d not preserved across %s: got=%#p want=%#p",
+		    i + 19, across, got[i], want[i]);
+	}
+}
+
+/*
+ * GP-callee coaccept response: 10 markers the worker chose plus the
+ * 10 c19-c28 values it observed on resumption.  The worker derives
+ * its markers from its own stack, so the caller doesn't know what
+ * to compare against unless the worker ships the markers back
+ * alongside the snapshot.  Compared in the caller-side test with
+ * __builtin_cheri_equal_exact.
+ */
+struct colocation_gp_cap_response {
+	void	*markers[GP_MARKER_COUNT];
+	void	*vals[GP_MARKER_COUNT];
+};
+
+/*
+ * Worker for the callee-side GP register-preservation test.  Mirrors the
+ * caller-side counterpart.  The worker loads markers in its own
+ * c19-c28 BEFORE its first coaccept, then on resumption reads them
+ * back and ships both markers and observed values to the caller via
+ * the second coaccept's response buffer.  Coroutine-shaped semantics:
+ * the worker should observe its own pre-coaccept state on resumption.
+ *
+ * The load-coaccept-read sequence runs in a pure-asm helper to keep
+ * the compiler from spilling/reloading the tracked registers around
+ * the call.
+ */
+static void
+colocation_callee_saved_gp_worker(void)
+{
+	intcap_t recv_buf = 0;
+	struct colocation_gp_cap_response response;
+	char buf[GP_MARKER_BUF_SIZE] __aligned(16);
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGTEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	build_gp_cap_markers(response.markers, buf);
+
+	gp_register_check_via_coaccept(NULL, response.markers, response.vals);
+
+	if (coaccept(NULL, &response, sizeof(response), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	err(EX_SOFTWARE, "Second coaccept returned.");
+}
+
+/*
+ * End-to-end check on the cocall path (libc cocall + switcher
+ * combined).  This test cannot distinguish "the switcher preserves
+ * c19-c28" from "the switcher mishandles them but libc cocall's
+ * prologue/epilogue saves and restores them around the call" -- but
+ * that distinction doesn't really matter for our purposes.  Users of cocall
+ * see the end-to-end behaviour, and if anything along the path
+ * stops preserving c19-c28 this test will start failing.
+ *
+ * Markers are tagged capabilities so the test exercises tag, bounds,
+ * permissions, and address bits -- any switcher bug that strips a tag,
+ * rewrites bounds, or clears permissions would surface.
+ */
+CHERIBSDTEST(colocation_callee_saved_gp_via_cocall,
+    "Check AArch64 callee-saved GP regs (c19-c28) survive cocall round-trips",
+    .ct_child_func = colocation_register_worker)
+{
+	void *target;
+	void *markers[GP_MARKER_COUNT];
+	void *vals[GP_MARKER_COUNT];
+	char buf[GP_MARKER_BUF_SIZE] __aligned(16);
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGTEST_SERVICE, pid);
+
+		build_gp_cap_markers(markers, buf);
+
+		gp_register_check_via_cocall(target, markers, vals);
+
+		check_caps_match(markers, vals, "cocall");
+
+		cheribsdtest_success();
+	}
+}
+
+CHERIBSDTEST(colocation_callee_saved_gp_via_coaccept,
+    "Check AArch64 callee-saved GP regs (c19-c28) survive coaccept round-trips",
+    .ct_child_func = colocation_callee_saved_gp_worker)
+{
+	void *target;
+	struct colocation_gp_cap_response response;
+	intcap_t send_buf = 0;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGTEST_SERVICE, pid);
+
+		cocall_or_fail(target, &send_buf, sizeof(send_buf),
+		    &response, sizeof(response));
+
+		check_caps_match(response.markers, response.vals,
+		    "coaccept resumption");
+
+		cheribsdtest_success();
+	}
+}
+#endif /* !CHERIBSD_C18N_TESTS */
+
+#endif /* defined(__aarch64__) */
 #endif
 
 static void
