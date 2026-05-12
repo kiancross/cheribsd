@@ -1,1 +1,6 @@
 CHERIBSD_IFUNC_TESTS=	yes
+
+.if ${MACHINE_ABI:Mpurecap}
+.PATH:	${CHERIBSDTEST_DIR}/${MACHINE}
+SRCS+=	cheribsdtest_colocation_asm.S
+.endif
