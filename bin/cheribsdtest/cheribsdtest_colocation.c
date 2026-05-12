@@ -53,6 +53,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sysexits.h>
 #include <unistd.h>
 
@@ -484,6 +485,193 @@ CHERIBSDTEST(colocation_callee_cpu_time,
 	}
 }
 
+#if defined(__aarch64__)
+/*
+ * Tests that the cocall switcher gives the caller and the callee each
+ * their own register values.
+ */
+
+#define	COLOCATION_REGISTER_TEST_SERVICE	"colocation_register_test"
+
+static void
+colocation_echo_worker(void)
+{
+	intcap_t buf = 0;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGISTER_TEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf,
+		    sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+	}
+}
+
+/* Defined in arm64/cheribsdtest_colocation_asm.S. */
+ssize_t	cocall_with_gp_markers(void *target,
+	    void * const *markers, void **values);
+
+ssize_t	coaccept_with_gp_markers(void *cookiep,
+	    void * const *markers, void **values);
+
+#define	GP_MARKER_FIRST_REG	19	/* c19 */
+#define	GP_MARKER_COUNT		10	/* c19-c28 */
+
+/*
+ * Fill markers[] with distinct capabilities that point into marker_bytes[],
+ * which must hold GP_MARKER_COUNT bytes.  The markers are tagged, so
+ * the check fails if the switcher changes a tag, bounds, or
+ * permissions, not only an address.
+ */
+static void
+build_gp_markers(void *markers[GP_MARKER_COUNT], char *marker_bytes)
+{
+	int i;
+
+	for (i = 0; i < GP_MARKER_COUNT; i++)
+		markers[i] = &marker_bytes[i];
+}
+
+/*
+ * A switcher that strips tags passes the check unless the markers are
+ * tagged.
+ */
+static void
+check_gp_markers(void * const want[GP_MARKER_COUNT],
+    void * const got[GP_MARKER_COUNT], const char *across)
+{
+	int i;
+
+	for (i = 0; i < GP_MARKER_COUNT; i++) {
+		if (!cheri_gettag(want[i]))
+			cheribsdtest_failure_errx("marker for c%d is untagged",
+			    GP_MARKER_FIRST_REG + i);
+
+		if (__builtin_cheri_equal_exact(got[i], want[i]))
+			continue;
+
+		cheribsdtest_failure_errx("c%d changed across %s: got %#p, "
+		    "want %#p", GP_MARKER_FIRST_REG + i, across, got[i],
+		    want[i]);
+	}
+}
+
+/*
+ * The worker's reply: the markers and the values of c19-c28 after the
+ * coaccept.  A coexec child can report only through its exit status, so the
+ * worker sends both to the test, which does the check and names any register
+ * that changed.  The test cannot build the markers itself, because they point
+ * into the worker's stack.
+ */
+struct colocation_gp_cap_response {
+	void	*markers[GP_MARKER_COUNT];
+	void	*values[GP_MARKER_COUNT];
+};
+
+/*
+ * The registers are set and read in assembly, so that the compiler cannot
+ * save and restore them around the coaccept.
+ */
+static void
+colocation_callee_saved_gp_worker(void)
+{
+	intcap_t recv_buf = 0;
+	struct colocation_gp_cap_response response;
+	char marker_bytes[GP_MARKER_COUNT];
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGISTER_TEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	build_gp_markers(response.markers, marker_bytes);
+
+	if (coaccept_with_gp_markers(NULL, response.markers,
+	    response.values) < 0)
+		err(EX_OSERR, "coaccept");
+
+	if (coaccept(NULL, &response, sizeof(response), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	errx(EX_SOFTWARE, "second coaccept returned");
+}
+
+/*
+ * The libc cocall() function can save and restore some of c19-c28
+ * itself.  For those registers, the test passes whatever the switcher
+ * does.
+ */
+CHERIBSDTEST(colocation_callee_saved_gp_via_cocall,
+    "Check that a caller's c19-c28 keep their values across cocall()",
+    .ct_child_func = colocation_echo_worker)
+{
+	void *target;
+	void *markers[GP_MARKER_COUNT];
+	void *values[GP_MARKER_COUNT];
+	char marker_bytes[GP_MARKER_COUNT];
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		build_gp_markers(markers, marker_bytes);
+
+		if (cocall_with_gp_markers(target, markers, values) < 0)
+			cheribsdtest_failure_err("cocall");
+
+		check_gp_markers(markers, values, "cocall");
+
+		cheribsdtest_success();
+	}
+}
+
+CHERIBSDTEST(colocation_callee_saved_gp_via_coaccept,
+    "Check that a callee's c19-c28 keep their values across coaccept()",
+    .ct_child_func = colocation_callee_saved_gp_worker)
+{
+	void *target;
+	struct colocation_gp_cap_response response;
+	intcap_t send_buf = 0;
+	pid_t pid;
+
+	/*
+	 * Start the reply with untagged markers, which fail the check, so
+	 * that only a correct reply from the worker passes.
+	 */
+	memset(&response, 0, sizeof(response));
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		cocall_or_fail(target, &send_buf, sizeof(send_buf),
+		    &response, sizeof(response));
+
+		check_gp_markers(response.markers, response.values, "coaccept");
+
+		cheribsdtest_success();
+	}
+}
+#endif /* defined(__aarch64__) */
 #endif /* !CHERIBSD_C18N_TESTS */
 #endif
 
