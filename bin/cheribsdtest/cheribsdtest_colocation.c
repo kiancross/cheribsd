@@ -497,6 +497,19 @@ cocall_or_fail(void *target, void *send_buf, size_t send_size,
 		cheribsdtest_failure_err("cocall");
 }
 
+/*
+ * Compare a single named capability (e.g., "CTPIDR_EL0") against an
+ * expected value using exact tag/bounds/perms/address equality.
+ */
+static void
+check_named_cap_match(const char *name, void *want, void *got,
+    const char *across)
+{
+	CHERIBSDTEST_VERIFY2(__builtin_cheri_equal_exact(got, want),
+	    "%s not preserved across %s: got=%#p want=%#p",
+	    name, across, got, want);
+}
+
 /* Excluded under c18n: a separate cocall fast-path issue causes SIGILL. */
 #ifndef CHERIBSD_C18N_TESTS
 
@@ -602,19 +615,6 @@ check_named_scalar_match(const char *name, unsigned long want,
 {
 	CHERIBSDTEST_VERIFY2(got == want,
 	    "%s not preserved across %s: got=0x%lx want=0x%lx",
-	    name, across, got, want);
-}
-
-/*
- * Compare a single named capability (e.g., "CTPIDR_EL0") against an
- * expected value using exact tag/bounds/perms/address equality.
- */
-static void
-check_named_cap_match(const char *name, void *want, void *got,
-    const char *across)
-{
-	CHERIBSDTEST_VERIFY2(__builtin_cheri_equal_exact(got, want),
-	    "%s not preserved across %s: got=%#p want=%#p",
 	    name, across, got, want);
 }
 
@@ -1088,6 +1088,226 @@ CHERIBSDTEST(colocation_ctpidr_el0_via_coaccept,
 	}
 }
 #endif /* !CHERIBSD_C18N_TESTS */
+
+#ifdef CHERIBSD_C18N_TESTS
+static void *
+read_rctpidr_el0(void)
+{
+	void *v;
+
+	__asm__ __volatile__ ("mrs %0, rctpidr_el0" : "=C" (v));
+	return (v);
+}
+
+/*
+ * RCTPIDR_EL0 mirror of the CTPIDR tests above.  On c18n-enabled
+ * purecap builds, rtld writes the TLS pointer into RCTPIDR_EL0
+ * rather than CTPIDR_EL0 (see sys/arm64/include/tls.h); compiled
+ * C code accesses TLS through RCTPIDR_EL0.  The cocall switcher
+ * does NOT save or restore RCTPIDR_EL0 -- it only handles
+ * CTPIDR_EL0.  When a fast-path cocall borrows the callee's
+ * execution onto the caller's kernel thread, the borrowed
+ * worker code therefore runs with the caller's RCTPIDR_EL0 still
+ * in place: any TLS access the worker makes reads or writes the
+ * caller's TCB.  These tests catch that, and so are only built
+ * for the c18n cheribsdtest binary.
+ */
+struct colocation_rctpidr_response {
+	void	*before;
+	void	*after;
+};
+
+static void
+colocation_rctpidr_worker(void)
+{
+	intcap_t recv_buf = 0;
+	struct colocation_rctpidr_response response;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGTEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	response.before = read_rctpidr_el0();
+
+	if (coaccept(NULL, &recv_buf, sizeof(recv_buf), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	response.after = read_rctpidr_el0();
+
+	if (coaccept(NULL, &response, sizeof(response), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	err(EX_SOFTWARE, "Second coaccept returned.");
+}
+
+CHERIBSDTEST(colocation_rctpidr_el0_via_cocall,
+    "Check RCTPIDR_EL0 (c18n TLS pointer) survives cocall round-trips",
+    .ct_child_func = colocation_register_worker,
+    .ct_xfail_reason =
+	"cocall fast-path switcher currently traps with SIGILL when invoked "
+	"from a c18n binary (separate, unidentified switcher bug).  Once that "
+	"is fixed this test will pass: the switcher never writes RCTPIDR_EL0, "
+	"so the caller's value survives a round-trip unmodified, independently "
+	"of any future RCTPIDR save/restore")
+{
+	void *target;
+	void *before, *after;
+	intcap_t buf = 0;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGTEST_SERVICE, pid);
+
+		before = read_rctpidr_el0();
+		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+		after = read_rctpidr_el0();
+
+		check_named_cap_match("RCTPIDR_EL0", before, after, "cocall");
+
+		cheribsdtest_success();
+	}
+}
+
+CHERIBSDTEST(colocation_rctpidr_el0_via_coaccept,
+    "Check RCTPIDR_EL0 (c18n TLS pointer) survives coaccept round-trips",
+    .ct_child_func = colocation_rctpidr_worker,
+    .ct_xfail_reason =
+	"cocall fast-path switcher currently traps with SIGILL when invoked "
+	"from a c18n binary (separate, unidentified switcher bug), which masks "
+	"the failure this test targets.  Once that is fixed this test still "
+	"fails: the switcher does not save/restore RCTPIDR_EL0 across the "
+	"fast-path borrow, so worker user-mode code runs with the caller's TLS")
+{
+	void *target;
+	struct colocation_rctpidr_response response;
+	intcap_t send_buf = 0;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGTEST_SERVICE, pid);
+
+		cocall_or_fail(target, &send_buf, sizeof(send_buf),
+		    &response, sizeof(response));
+
+		check_named_cap_match("RCTPIDR_EL0", response.before,
+		    response.after, "coaccept resumption");
+
+		cheribsdtest_success();
+	}
+}
+
+/*
+ * User-visible demonstration of the RCTPIDR_EL0 leak.  The previous
+ * test catches the bug at the register level; this one shows the
+ * data-corruption consequence: TLS writes made by the worker during
+ * its borrowed execution end up in the caller's TCB.
+ *
+ * The caller sets errno to a sentinel before the cocall.  The
+ * worker, on resumption, writes a different sentinel to errno --
+ * because its RCTPIDR_EL0 still points at the caller's TCB, this
+ * write lands in the caller's errno slot, not its own.  After the
+ * cocall returns the caller reads errno: if the bug is present,
+ * errno is the worker's sentinel.
+ *
+ * Sentinels are outside the normal errno range (1..ELAST, currently
+ * 98) so a stray real errno can't masquerade as the caller's value and
+ * mask the corruption.
+ */
+#define	CALLER_ERRNO_SENTINEL	0x4711
+#define	WORKER_ERRNO_SENTINEL	0x5a5a
+
+static void
+colocation_errno_leak_worker(void)
+{
+	intcap_t recv_buf = 0;
+	intcap_t response = 0;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGTEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	if (coaccept(NULL, &recv_buf, sizeof(recv_buf), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	/*
+	 * If RCTPIDR_EL0 still holds the caller's TLS pointer, this
+	 * errno write lands in the caller's errno, not the worker's.
+	 */
+	errno = WORKER_ERRNO_SENTINEL;
+
+	/*
+	 * The buggy store has already landed in the caller's TCB at
+	 * the userspace store above; whatever this coaccept does to
+	 * errno -- via libc, syscall stubs, or unborrow -- does not
+	 * affect the test's observation.
+	 */
+	if (coaccept(NULL, &response, sizeof(response), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	err(EX_SOFTWARE, "Second coaccept returned.");
+}
+
+CHERIBSDTEST(colocation_errno_leak_via_cocall,
+    "Check that a worker's TLS writes do not leak into the caller's TCB",
+    .ct_child_func = colocation_errno_leak_worker,
+    .ct_xfail_reason =
+	"cocall fast-path switcher currently traps with SIGILL when invoked "
+	"from a c18n binary (separate, unidentified switcher bug), which masks "
+	"the failure this test targets.  Once that is fixed this test still "
+	"fails: the switcher does not save/restore RCTPIDR_EL0 across the "
+	"fast-path borrow, so the worker's errno writes corrupt the caller's "
+	"TCB")
+{
+	void *target;
+	int caller_after;
+	intcap_t buf = 0;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGTEST_SERVICE, pid);
+
+		errno = CALLER_ERRNO_SENTINEL;
+
+		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+
+		caller_after = errno;
+
+		CHERIBSDTEST_VERIFY2(caller_after == CALLER_ERRNO_SENTINEL,
+		    "Caller's errno corrupted across cocall: "
+		    "before=0x%x after=0x%x (worker wrote 0x%x)",
+		    CALLER_ERRNO_SENTINEL, caller_after,
+		    WORKER_ERRNO_SENTINEL);
+
+		cheribsdtest_success();
+	}
+}
+#endif /* CHERIBSD_C18N_TESTS */
 #endif /* defined(__aarch64__) */
 #endif
 
