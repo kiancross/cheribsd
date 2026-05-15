@@ -814,9 +814,7 @@ colocation_fp_status_control_worker(void)
 
 CHERIBSDTEST(colocation_callee_saved_fp_via_cocall,
     "Check AArch64 callee-saved FP regs (q8-q15) survive cocall round-trips",
-    .ct_child_func = colocation_register_worker,
-    .ct_xfail_reason =
-	"Morello cocall fast-path switcher mishandles callee-saved FP registers (q8-q15)")
+    .ct_child_func = colocation_register_worker)
 {
 	void *target;
 	struct fp_q_slot markers[8];
@@ -932,9 +930,7 @@ CHERIBSDTEST(colocation_fp_status_control_via_cocall,
 
 CHERIBSDTEST(colocation_callee_saved_fp_via_coaccept,
     "Check AArch64 callee-saved FP regs (q8-q15) survive coaccept round-trips",
-    .ct_child_func = colocation_callee_saved_fp_worker,
-    .ct_xfail_reason =
-	"Morello cocall fast-path switcher mishandles callee-saved FP registers (q8-q15)")
+    .ct_child_func = colocation_callee_saved_fp_worker)
 {
 	void *target;
 	struct colocation_fp_q_response response;
