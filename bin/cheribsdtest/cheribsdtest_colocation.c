@@ -1986,9 +1986,7 @@ colocation_fp_status_control_worker(void)
  */
 CHERIBSDTEST(colocation_callee_saved_fp_via_cocall,
     "Check that a caller's q8-q15 keep their values across cocall()",
-    .ct_child_func = colocation_echo_worker,
-    .ct_xfail_reason =
-	"The cocall switcher restores q8-q15 from the wrong slots")
+    .ct_child_func = colocation_echo_worker)
 {
 	void *target;
 	struct fp_q_value markers[FP_MARKER_COUNT];
@@ -2091,9 +2089,7 @@ CHERIBSDTEST(colocation_fp_status_control_via_cocall,
  */
 CHERIBSDTEST(colocation_callee_saved_fp_via_coaccept,
     "Check that a callee's q8-q15 keep their values across coaccept()",
-    .ct_child_func = colocation_callee_saved_fp_worker,
-    .ct_xfail_reason =
-	"The cocall switcher restores q8-q15 from the wrong slots")
+    .ct_child_func = colocation_callee_saved_fp_worker)
 {
 	void *target;
 	struct fp_q_value markers[FP_MARKER_COUNT];
@@ -2583,9 +2579,7 @@ CHERIBSDTEST(colocation_switcher_cocall_direct,
     "Check that the switcher keeps a caller's c19-c28, q8-q15, FPCR, FPSR "
     "and CTPIDR_EL0 across a cocall, with no C frame that could restore a "
     "lost value",
-    .ct_child_func = colocation_echo_worker,
-    .ct_xfail_reason =
-	"The cocall switcher restores q8-q15 from the wrong slots")
+    .ct_child_func = colocation_echo_worker)
 {
 	void *target;
 	void *cocall_code;
@@ -2690,9 +2684,7 @@ CHERIBSDTEST(colocation_switcher_coaccept_direct,
     "Check that the switcher keeps a callee's c19-c28, q8-q15, FPCR, FPSR "
     "and CTPIDR_EL0 across a coaccept, with no C frame that could restore a "
     "lost value",
-    .ct_child_func = colocation_switcher_coaccept_direct_worker,
-    .ct_xfail_reason =
-	"The cocall switcher restores q8-q15 from the wrong slots")
+    .ct_child_func = colocation_switcher_coaccept_direct_worker)
 {
 	void *target;
 	intcap_t send_buf = 0;
