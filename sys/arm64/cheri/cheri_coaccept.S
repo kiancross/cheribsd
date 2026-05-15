@@ -160,8 +160,7 @@ SIGCODE(switcher_coaccept)
 	mov	csp, c10
 	ldr	c30, SCB_CRA(c8)
 
-#ifdef can_build_now
-	ldr	q8, SCB_Q9(c8)
+	ldr	q8, SCB_Q8(c8)
 	ldr	q9, SCB_Q9(c8)
 	ldr	q10, SCB_Q10(c8)
 	ldr	q11, SCB_Q11(c8)
@@ -169,18 +168,7 @@ SIGCODE(switcher_coaccept)
 	ldr	q13, SCB_Q13(c8)
 	ldr	q14, SCB_Q14(c8)
 	ldr	q15, SCB_Q15(c8)
-#else
-	add	c9, c8, #3*CHERICAP_SIZE
-	# XXX: Won't compile if the immediate is #0, that's why we need the line above
-	ldr	q8, [c9, #1*CHERICAP_SIZE]
-	ldr	q9, [c9, #2*CHERICAP_SIZE]
-	ldr	q10, [c9, #3*CHERICAP_SIZE]
-	ldr	q11, [c9, #4*CHERICAP_SIZE]
-	ldr	q12, [c9, #5*CHERICAP_SIZE]
-	ldr	q13, [c9, #6*CHERICAP_SIZE]
-	ldr	q14, [c9, #7*CHERICAP_SIZE]
-	ldr	q15, [c9, #8*CHERICAP_SIZE]
-#endif
+
 	ldr	x10, SCB_FPCR(c8);
 	msr	FPCR, x10
 	ldr	x10, SCB_FPSR(c8);
