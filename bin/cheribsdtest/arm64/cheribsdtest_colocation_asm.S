@@ -33,22 +33,25 @@
  */
 
 /*
- * Pure-assembly helpers for the colocation GP register-preservation tests.
+ * Pure-assembly helpers for the colocation register-preservation tests.
  *
- * Each helper loads caller-supplied tagged-capability markers into
- * c19-c28, issues a single cocall (caller side) or coaccept (callee
- * side), then writes the post-call c19-c28 (full capabilities, tag +
+ * The GP helpers load caller-supplied tagged-capability markers into
+ * c19-c28, issue a single cocall (caller side) or coaccept (callee
+ * side), then write the post-call c19-c28 (full capabilities, tag +
  * bounds + perms + address) back through the caller-supplied vals[]
  * pointer.  Using tagged-capability markers means the test exercises
  * not just the 64-bit address half but the whole capability, so any
  * switcher bug that strips a tag, rewrites bounds, or clears
  * permissions would surface.
  *
- * The helpers are AAPCS-compliant -- they save the caller's c19-c28
- * on entry and restore them on exit.  The post-cocall / post-coaccept
- * register snapshot is captured to vals[] BEFORE the restore.  Order
- * matters here -- if the snapshot is taken after the restore, the
- * test silently masks itself.
+ * The FP helpers do the same for d8-d15.
+ *
+ * The helpers are AAPCS-compliant -- they save the caller's
+ * callee-saved registers (c19-c28 / d8-d15) on entry and restore them
+ * on exit.  The post-cocall / post-coaccept register snapshot is
+ * captured to vals[] BEFORE the restore.  Order matters here -- if
+ * the snapshot is taken after the restore, the test silently masks
+ * itself.
  *
  * Only built for purecap; the asm assumes capability args in c0/c1,
  * a capability stack pointer, and a capability link register.
@@ -56,15 +59,20 @@
  * x9 (REG(9)) is used as caller-saved scratch to hold the vals
  * pointer after the cocall/coaccept returns -- nothing else in the
  * helpers may rely on x9 surviving across that span.  Frame layout
- * is shared between the helpers; growing the saved-vals slot or
+ * is shared between all helpers; growing the saved-vals slot or
  * scratch buffer requires updating each.
+ *
+ * The fp helpers rely on the cocall/coaccept path being FP-free --
+ * any FP arithmetic between the marker load and the snapshot would
+ * clobber d8-d15 and pollute the result.  cocall and coaccept are
+ * integer-only, so the assumption holds.
  */
 
 #include <machine/asm.h>
 #include <sys/elf_common.h>
 
 /*
- * Common stack frame layout used by both helpers:
+ * Common stack frame layout used by all helpers:
  *
  *   [sp + 0 .. 15]                              : 16-byte scratch buffer
  *                                                  used as the cocall
@@ -82,8 +90,10 @@
 #define	SAVED_REGS_OFF		(16 + 2 * REG_WIDTH)
 
 #define	GP_SAVE_SIZE		160	/* 10 callee-saved c-regs * 16 */
+#define	FP_SAVE_SIZE		128	/* 8 callee-saved q-regs * 16 */
 
 #define	GP_FRAME_SIZE		(SAVED_REGS_OFF + GP_SAVE_SIZE)
+#define	FP_FRAME_SIZE		(SAVED_REGS_OFF + FP_SAVE_SIZE)
 
 /*
  * void gp_register_check_via_cocall(void *target,
@@ -151,6 +161,63 @@ ENTRY(gp_register_check_via_cocall)
 END(gp_register_check_via_cocall)
 
 /*
+ * void fp_register_check_via_cocall(void *target,
+ *     const void *markers, void *vals);
+ *
+ * On entry: REG(0) = target, REG(1) = markers (8 q-regs = 128 bytes),
+ * REG(2) = vals (8 q-regs = 128 bytes).  Loads markers into q8..q15,
+ * issues a cocall, then writes the post-cocall q8..q15 (full 128-bit,
+ * covering both d-low and the upper half of v) into vals.  Caller's
+ * q8..q15 are preserved across the call per AAPCS.
+ */
+ENTRY(fp_register_check_via_cocall)
+	sub	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+	str	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	str	REG(2), [REGN(sp), #SAVED_VALS_OFF]
+
+	/* Save caller's q8-q15 (full 128 bits each). */
+	stp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	stp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 32)]
+	stp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 64)]
+	stp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 96)]
+
+	/* Load markers from REG(1) into q8-q15. */
+	ldp	q8,  q9,  [REG(1)]
+	ldp	q10, q11, [REG(1), #32]
+	ldp	q12, q13, [REG(1), #64]
+	ldp	q14, q15, [REG(1), #96]
+
+	/* Set up and issue the cocall. */
+	mov	REG(1), REGN(sp)
+	mov	x2, #16
+	mov	REG(3), REGN(sp)
+	mov	x4, #16
+	bl	cocall
+
+	/*
+	 * Snapshot post-cocall q8-q15 through vals BEFORE restoring
+	 * caller's q8-q15.
+	 */
+	ldr	REG(9), [REGN(sp), #SAVED_VALS_OFF]
+	stp	q8,  q9,  [REG(9)]
+	stp	q10, q11, [REG(9), #32]
+	stp	q12, q13, [REG(9), #64]
+	stp	q14, q15, [REG(9), #96]
+
+	/* Restore caller's q8-q15. */
+	ldp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	ldp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 32)]
+	ldp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 64)]
+	ldp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 96)]
+
+	/* Restore lr and tear down frame. */
+	ldr	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	add	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+
+	RETURN
+END(fp_register_check_via_cocall)
+
+/*
  * void gp_register_check_via_coaccept(void *cookiep,
  *     void * const *markers, void **vals);
  *
@@ -215,5 +282,57 @@ ENTRY(gp_register_check_via_coaccept)
 
 	RETURN
 END(gp_register_check_via_coaccept)
+
+/*
+ * void fp_register_check_via_coaccept(void *cookiep,
+ *     const void *markers, void *vals);
+ *
+ * Callee-side mirror of fp_register_check_via_cocall.
+ */
+ENTRY(fp_register_check_via_coaccept)
+	sub	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+	str	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	str	REG(2), [REGN(sp), #SAVED_VALS_OFF]
+
+	/* Save caller's q8-q15 (full 128 bits each). */
+	stp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	stp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 32)]
+	stp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 64)]
+	stp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 96)]
+
+	/* Load markers from REG(1) into q8-q15. */
+	ldp	q8,  q9,  [REG(1)]
+	ldp	q10, q11, [REG(1), #32]
+	ldp	q12, q13, [REG(1), #64]
+	ldp	q14, q15, [REG(1), #96]
+
+	/* Set up and issue the coaccept. */
+	mov	REG(1), REGN(sp)
+	mov	x2, #16
+	mov	REG(3), REGN(sp)
+	mov	x4, #16
+	bl	coaccept
+
+	/*
+	 * Snapshot post-coaccept q8-q15 through vals BEFORE restoring
+	 * caller's q8-q15.
+	 */
+	ldr	REG(9), [REGN(sp), #SAVED_VALS_OFF]
+	stp	q8,  q9,  [REG(9)]
+	stp	q10, q11, [REG(9), #32]
+	stp	q12, q13, [REG(9), #64]
+	stp	q14, q15, [REG(9), #96]
+
+	/* Restore caller's q8-q15. */
+	ldp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	ldp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 32)]
+	ldp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 64)]
+	ldp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 96)]
+
+	ldr	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	add	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+
+	RETURN
+END(fp_register_check_via_coaccept)
 
 GNU_PROPERTY_AARCH64_FEATURE_1_NOTE(GNU_PROPERTY_AARCH64_FEATURE_1_VAL)
