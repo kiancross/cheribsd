@@ -151,6 +151,15 @@ extern struct cheribsdtest_child_state *ccsp;
 #endif
 #endif
 
+#ifndef XFAIL_C18N_COCALL_FAULT
+#ifdef CHERIBSD_C18N_TESTS
+#define	XFAIL_C18N_COCALL_FAULT \
+    "A bug causes a cocall to fault under c18n"
+#else
+#define	XFAIL_C18N_COCALL_FAULT	NULL
+#endif
+#endif
+
 struct cheri_test {
 	const char	*ct_name;
 	const char	*ct_desc;
