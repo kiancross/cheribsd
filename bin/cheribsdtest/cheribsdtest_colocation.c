@@ -284,11 +284,6 @@ CHERIBSDTEST(colocation_coaccept_slow,
 	}
 }
 
-/*
- * Excluded under c18n, where a bug causes a cocall to fault.
- */
-#ifndef CHERIBSD_C18N_TESTS
-
 static pid_t colocation_worker;
 
 static void
@@ -352,6 +347,11 @@ cocall_or_fail(void *target, void *send_buf, size_t send_size,
 		cheribsdtest_failure_errx("reply is %zd bytes, want %zu",
 		    received, recv_size);
 }
+
+/*
+ * Excluded under c18n, where a bug causes a cocall to fault.
+ */
+#ifndef CHERIBSD_C18N_TESTS
 
 static void
 burn_cpu(unsigned long iterations)
@@ -486,6 +486,8 @@ CHERIBSDTEST(colocation_callee_cpu_time,
 	}
 }
 
+#endif /* !CHERIBSD_C18N_TESTS */
+
 #if defined(__aarch64__)
 /*
  * Tests that the cocall switcher gives the caller and the callee each
@@ -511,6 +513,22 @@ colocation_echo_worker(void)
 			err(EX_OSERR, "coaccept");
 	}
 }
+
+static void
+check_same_capability(const char *name, void *want, void *got,
+    const char *across)
+{
+	if (__builtin_cheri_equal_exact(got, want))
+		return;
+
+	cheribsdtest_failure_errx("%s changed across %s: got %#p, want %#p",
+	    name, across, got, want);
+}
+
+/*
+ * Excluded under c18n, where a bug causes a cocall to fault.
+ */
+#ifndef CHERIBSD_C18N_TESTS
 
 #define	FP_MARKER_FIRST_REG	8	/* q8 */
 #define	FP_MARKER_COUNT		8	/* q8-q15 */
@@ -963,8 +981,156 @@ CHERIBSDTEST(colocation_fp_status_control_via_coaccept,
 		cheribsdtest_success();
 	}
 }
-#endif /* defined(__aarch64__) */
+
 #endif /* !CHERIBSD_C18N_TESTS */
+
+static void *
+read_ctpidr_el0(void)
+{
+	void *v;
+
+	__asm__ __volatile__ ("mrs %0, ctpidr_el0" : "=C" (v));
+	return (v);
+}
+
+/*
+ * The reply from register_across_coaccept_worker(): a register's value
+ * before the worker entered coaccept() and after coaccept() returned.
+ */
+struct colocation_register_response {
+	void	*before;
+	void	*after;
+};
+
+/* Worker for check_register_across_coaccept(). */
+static void
+register_across_coaccept_worker(void *(*read_register)(void))
+{
+	intcap_t recv_buf = 0;
+	struct colocation_register_response response;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGISTER_TEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	response.before = read_register();
+
+	if (coaccept(NULL, &recv_buf, sizeof(recv_buf), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	response.after = read_register();
+
+	if (coaccept(NULL, &response, sizeof(response), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	errx(EX_SOFTWARE, "second coaccept returned");
+}
+
+static void
+check_register_across_cocall(const char *name, void *(*read_register)(void))
+{
+	void *target;
+	void *before;
+	void *after;
+	intcap_t buf = 0;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		before = read_register();
+		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+		after = read_register();
+
+		check_same_capability(name, before, after, "cocall");
+
+		cheribsdtest_success();
+	}
+}
+
+static void
+check_register_across_coaccept(const char *name)
+{
+	void *target;
+	struct colocation_register_response response;
+	intcap_t send_buf = 0;
+	pid_t pid;
+
+	/*
+	 * Start the reply with values that fail the check, so that only a
+	 * correct reply from the worker passes.
+	 */
+	response.before = NULL;
+	response.after = &response;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		cocall_or_fail(target, &send_buf, sizeof(send_buf),
+		    &response, sizeof(response));
+
+		check_same_capability(name, response.before, response.after,
+		    "coaccept");
+
+		cheribsdtest_success();
+	}
+}
+
+/*
+ * The CTPIDR_EL0 tests read the register before and after the call,
+ * rather than loading a marker into it.  CTPIDR_EL0 is the TLS pointer,
+ * and cocall() and coaccept() read thread-local variables, so a marker
+ * would cause them to fault before the switcher ran.
+ *
+ * In c18n's purecap ABI, the TLS pointer is RCTPIDR_EL0.  The tests still
+ * check it, because they run in Restricted mode, where reads of CTPIDR_EL0
+ * return RCTPIDR_EL0.
+ *
+ * The cocall() test catches a switcher that restores the wrong value to
+ * the caller.  The coaccept() test catches one that does not give the
+ * callee its own value: the worker reads CTPIDR_EL0 before it waits and
+ * again when coaccept() returns, and the two must match.
+ */
+static void
+colocation_ctpidr_el0_worker(void)
+{
+	register_across_coaccept_worker(read_ctpidr_el0);
+}
+
+CHERIBSDTEST(colocation_ctpidr_el0_via_cocall,
+    "Check that a caller's CTPIDR_EL0 keeps its value across cocall()",
+    .ct_child_func = colocation_echo_worker,
+    .ct_xfail_reason = XFAIL_C18N_COCALL_FAULT)
+{
+	check_register_across_cocall("CTPIDR_EL0", read_ctpidr_el0);
+}
+
+CHERIBSDTEST(colocation_ctpidr_el0_via_coaccept,
+    "Check that a callee's CTPIDR_EL0 keeps its value across coaccept()",
+    .ct_child_func = colocation_ctpidr_el0_worker,
+    .ct_xfail_reason = XFAIL_C18N_COCALL_FAULT)
+{
+	check_register_across_coaccept("CTPIDR_EL0");
+}
+#endif /* defined(__aarch64__) */
 #endif
 
 static void
