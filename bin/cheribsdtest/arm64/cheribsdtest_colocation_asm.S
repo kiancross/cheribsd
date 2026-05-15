@@ -45,7 +45,7 @@
 #include <sys/elf_common.h>
 
 /*
- * Stack frame of the GP helpers, from sp upwards:
+ * Stack frame of the GP and FP helpers, from sp upwards:
  *
  *   SCRATCH_SIZE bytes	send and receive buffer for the call
  *   REG_WIDTH bytes	saved link register
@@ -62,9 +62,13 @@
 #define	SAVED_VALUES_OFF	(SCRATCH_SIZE + REG_WIDTH)
 #define	SAVED_REGS_OFF		(SCRATCH_SIZE + 2 * REG_WIDTH)
 
+#define	Q_WIDTH			16	/* bytes in a q register */
+
 #define	GP_SAVE_SIZE		(10 * REG_WIDTH)	/* c19-c28 */
+#define	FP_SAVE_SIZE		(8 * Q_WIDTH)		/* q8-q15 */
 
 #define	GP_FRAME_SIZE		(SAVED_REGS_OFF + GP_SAVE_SIZE)
+#define	FP_FRAME_SIZE		(SAVED_REGS_OFF + FP_SAVE_SIZE)
 
 /*
  * ssize_t cocall_with_gp_markers(void *target,
@@ -119,6 +123,54 @@ ENTRY(cocall_with_gp_markers)
 END(cocall_with_gp_markers)
 
 /*
+ * ssize_t cocall_with_fp_markers(void *target,
+ *     const struct fp_q_value *markers, struct fp_q_value *values);
+ *
+ * Loads markers[0..7] into q8-q15, calls cocall() with target, and
+ * stores q8-q15 to values[0..7].  Returns what cocall() returns.
+ */
+ENTRY(cocall_with_fp_markers)
+	sub	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+	stp	xzr, xzr, [REGN(sp)]	/* send no stale stack data */
+	str	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	str	REG(2), [REGN(sp), #SAVED_VALUES_OFF]
+
+	stp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	stp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 2 * Q_WIDTH)]
+	stp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 4 * Q_WIDTH)]
+	stp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 6 * Q_WIDTH)]
+
+	ldp	q8,  q9,  [REG(1)]
+	ldp	q10, q11, [REG(1), #(2 * Q_WIDTH)]
+	ldp	q12, q13, [REG(1), #(4 * Q_WIDTH)]
+	ldp	q14, q15, [REG(1), #(6 * Q_WIDTH)]
+
+	/* cocall(target, scratch, SCRATCH_SIZE, scratch, SCRATCH_SIZE) */
+	mov	REG(1), REGN(sp)
+	mov	x2, #SCRATCH_SIZE
+	mov	REG(3), REGN(sp)
+	mov	x4, #SCRATCH_SIZE
+	bl	cocall
+
+	/* Store q8-q15 to values before restoring the caller's q8-q15. */
+	ldr	REG(9), [REGN(sp), #SAVED_VALUES_OFF]
+	stp	q8,  q9,  [REG(9)]
+	stp	q10, q11, [REG(9), #(2 * Q_WIDTH)]
+	stp	q12, q13, [REG(9), #(4 * Q_WIDTH)]
+	stp	q14, q15, [REG(9), #(6 * Q_WIDTH)]
+
+	ldp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	ldp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 2 * Q_WIDTH)]
+	ldp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 4 * Q_WIDTH)]
+	ldp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 6 * Q_WIDTH)]
+
+	ldr	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	add	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+
+	RETURN
+END(cocall_with_fp_markers)
+
+/*
  * ssize_t coaccept_with_gp_markers(void *cookiep,
  *     void * const *markers, void **values);
  *
@@ -169,5 +221,53 @@ ENTRY(coaccept_with_gp_markers)
 
 	RETURN
 END(coaccept_with_gp_markers)
+
+/*
+ * ssize_t coaccept_with_fp_markers(void *cookiep,
+ *     const struct fp_q_value *markers, struct fp_q_value *values);
+ *
+ * Loads markers[0..7] into q8-q15, calls coaccept() with cookiep, and
+ * stores q8-q15 to values[0..7] when coaccept() returns.  Returns what
+ * coaccept() returns.
+ */
+ENTRY(coaccept_with_fp_markers)
+	sub	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+	str	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	str	REG(2), [REGN(sp), #SAVED_VALUES_OFF]
+
+	stp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	stp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 2 * Q_WIDTH)]
+	stp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 4 * Q_WIDTH)]
+	stp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 6 * Q_WIDTH)]
+
+	ldp	q8,  q9,  [REG(1)]
+	ldp	q10, q11, [REG(1), #(2 * Q_WIDTH)]
+	ldp	q12, q13, [REG(1), #(4 * Q_WIDTH)]
+	ldp	q14, q15, [REG(1), #(6 * Q_WIDTH)]
+
+	/* coaccept(cookiep, scratch, SCRATCH_SIZE, scratch, SCRATCH_SIZE) */
+	mov	REG(1), REGN(sp)
+	mov	x2, #SCRATCH_SIZE
+	mov	REG(3), REGN(sp)
+	mov	x4, #SCRATCH_SIZE
+	bl	coaccept
+
+	/* Store q8-q15 to values before restoring the caller's q8-q15. */
+	ldr	REG(9), [REGN(sp), #SAVED_VALUES_OFF]
+	stp	q8,  q9,  [REG(9)]
+	stp	q10, q11, [REG(9), #(2 * Q_WIDTH)]
+	stp	q12, q13, [REG(9), #(4 * Q_WIDTH)]
+	stp	q14, q15, [REG(9), #(6 * Q_WIDTH)]
+
+	ldp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	ldp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 2 * Q_WIDTH)]
+	ldp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 4 * Q_WIDTH)]
+	ldp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 6 * Q_WIDTH)]
+
+	ldr	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	add	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+
+	RETURN
+END(coaccept_with_fp_markers)
 
 GNU_PROPERTY_AARCH64_FEATURE_1_NOTE(GNU_PROPERTY_AARCH64_FEATURE_1_VAL)

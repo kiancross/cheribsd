@@ -52,6 +52,7 @@
 #include <libprocstat.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sysexits.h>
@@ -511,12 +512,44 @@ colocation_echo_worker(void)
 	}
 }
 
+#define	FP_MARKER_FIRST_REG	8	/* q8 */
+#define	FP_MARKER_COUNT		8	/* q8-q15 */
+
+/*
+ * The value of one of q8-q15.  AAPCS requires a callee to preserve only
+ * the low half (d8-d15), but the switcher saves all 128 bits.  The markers have
+ * different low and high halves, so the check fails if the switcher
+ * saves only d8-d15.  The worker sends these structures through
+ * coaccept(), whose buffers must be aligned to a capability.
+ */
+struct fp_q_value {
+	uint64_t	low;
+	uint64_t	high;
+} __aligned(16);
+
 /* Defined in arm64/cheribsdtest_colocation_asm.S. */
+ssize_t	cocall_with_fp_markers(void *target,
+	    const struct fp_q_value *markers, struct fp_q_value *values);
+
 ssize_t	cocall_with_gp_markers(void *target,
 	    void * const *markers, void **values);
 
+ssize_t	coaccept_with_fp_markers(void *cookiep,
+	    const struct fp_q_value *markers, struct fp_q_value *values);
+
 ssize_t	coaccept_with_gp_markers(void *cookiep,
 	    void * const *markers, void **values);
+
+static void
+build_fp_markers(struct fp_q_value markers[FP_MARKER_COUNT])
+{
+	int i;
+
+	for (i = 0; i < FP_MARKER_COUNT; i++) {
+		markers[i].low = 0x1000000000000000ULL + i;
+		markers[i].high = 0x2000000000000000ULL + i;
+	}
+}
 
 #define	GP_MARKER_FIRST_REG	19	/* c19 */
 #define	GP_MARKER_COUNT		10	/* c19-c28 */
@@ -534,6 +567,70 @@ build_gp_markers(void *markers[GP_MARKER_COUNT], char *marker_bytes)
 
 	for (i = 0; i < GP_MARKER_COUNT; i++)
 		markers[i] = &marker_bytes[i];
+}
+
+static void
+check_fp_markers(const struct fp_q_value want[FP_MARKER_COUNT],
+    const struct fp_q_value got[FP_MARKER_COUNT], const char *across)
+{
+	int i;
+
+	for (i = 0; i < FP_MARKER_COUNT; i++) {
+		if (got[i].low == want[i].low && got[i].high == want[i].high)
+			continue;
+
+		cheribsdtest_failure_errx("q%d changed across %s: got "
+		    "%#lx:%016lx, want %#lx:%016lx", FP_MARKER_FIRST_REG + i,
+		    across, got[i].high, got[i].low, want[i].high,
+		    want[i].low);
+	}
+}
+
+static void
+check_scalar_marker(const char *name, unsigned long want,
+    unsigned long got, const char *across)
+{
+	if (got == want)
+		return;
+
+	cheribsdtest_failure_errx("%s changed across %s: got %#lx, want %#lx",
+	    name, across, got, want);
+}
+
+/* Sent through coaccept(), whose buffers must be aligned to a capability. */
+struct fp_status_control {
+	unsigned long	fpcr;
+	unsigned long	fpsr;
+} __aligned(16);
+
+/*
+ * Both markers are non-zero, so the check fails if the switcher zeroes
+ * the registers.  The FPCR marker rounds towards plus infinity, and the
+ * FPSR marker has the invalid-operation and inexact flags set.  A
+ * floating-point instruction between writing the markers and reading
+ * the registers back could set more FPSR flags, so the tests run none.
+ */
+static const struct fp_status_control fp_status_control_markers = {
+	.fpcr = 0x00400000,
+	.fpsr = 0x11,
+};
+
+static void
+write_fp_status_control(const struct fp_status_control *fpsc)
+{
+	__asm__ __volatile__ (
+	    "msr fpcr, %0\n\t"
+	    "msr fpsr, %1"
+	    : : "r" (fpsc->fpcr), "r" (fpsc->fpsr));
+}
+
+static void
+read_fp_status_control(struct fp_status_control *fpsc)
+{
+	__asm__ __volatile__ (
+	    "mrs %0, fpcr\n\t"
+	    "mrs %1, fpsr"
+	    : "=r" (fpsc->fpcr), "=r" (fpsc->fpsr));
 }
 
 /*
@@ -574,6 +671,37 @@ struct colocation_gp_cap_response {
 
 /*
  * The registers are set and read in assembly, so that the compiler cannot
+ * save and restore them around the coaccept.  Unlike the c19-c28 worker,
+ * this one sends back only the values it read: the markers are fixed
+ * numbers, so the test builds its own copy.
+ */
+static void
+colocation_callee_saved_fp_worker(void)
+{
+	intcap_t recv_buf = 0;
+	struct fp_q_value markers[FP_MARKER_COUNT];
+	struct fp_q_value values[FP_MARKER_COUNT];
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGISTER_TEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	build_fp_markers(markers);
+
+	if (coaccept_with_fp_markers(NULL, markers, values) < 0)
+		err(EX_OSERR, "coaccept");
+
+	if (coaccept(NULL, values, sizeof(values), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	errx(EX_SOFTWARE, "second coaccept returned");
+}
+
+/*
+ * The registers are set and read in assembly, so that the compiler cannot
  * save and restore them around the coaccept.
  */
 static void
@@ -600,6 +728,70 @@ colocation_callee_saved_gp_worker(void)
 		err(EX_OSERR, "coaccept");
 
 	errx(EX_SOFTWARE, "second coaccept returned");
+}
+
+static void
+colocation_fp_status_control_worker(void)
+{
+	intcap_t recv_buf = 0;
+	struct fp_status_control values;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGISTER_TEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	write_fp_status_control(&fp_status_control_markers);
+
+	if (coaccept(NULL, &recv_buf, sizeof(recv_buf), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	read_fp_status_control(&values);
+
+	if (coaccept(NULL, &values, sizeof(values), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	errx(EX_SOFTWARE, "second coaccept returned");
+}
+
+/*
+ * The libc cocall() function can save and restore some of q8-q15
+ * itself.  For those registers, the test passes whatever the switcher
+ * does.
+ */
+CHERIBSDTEST(colocation_callee_saved_fp_via_cocall,
+    "Check that a caller's q8-q15 keep their values across cocall()",
+    .ct_child_func = colocation_echo_worker,
+    .ct_xfail_reason =
+	"The cocall switcher restores q8-q15 from the wrong slots")
+{
+	void *target;
+	struct fp_q_value markers[FP_MARKER_COUNT];
+	struct fp_q_value values[FP_MARKER_COUNT];
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		build_fp_markers(markers);
+
+		if (cocall_with_fp_markers(target, markers, values) < 0)
+			cheribsdtest_failure_err("cocall");
+
+		check_fp_markers(markers, values, "cocall");
+
+		cheribsdtest_success();
+	}
 }
 
 /*
@@ -638,6 +830,75 @@ CHERIBSDTEST(colocation_callee_saved_gp_via_cocall,
 	}
 }
 
+CHERIBSDTEST(colocation_fp_status_control_via_cocall,
+    "Check that a caller's FPCR and FPSR keep their values across cocall()",
+    .ct_child_func = colocation_echo_worker)
+{
+	void *target;
+	intcap_t buf = 0;
+	struct fp_status_control values;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		write_fp_status_control(&fp_status_control_markers);
+		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+		read_fp_status_control(&values);
+
+		check_scalar_marker("FPCR", fp_status_control_markers.fpcr,
+		    values.fpcr, "cocall");
+		check_scalar_marker("FPSR", fp_status_control_markers.fpsr,
+		    values.fpsr, "cocall");
+
+		cheribsdtest_success();
+	}
+}
+
+/*
+ * The libc coaccept() function can save and restore some of q8-q15
+ * itself.  For those registers, the test passes whatever the switcher
+ * does.
+ */
+CHERIBSDTEST(colocation_callee_saved_fp_via_coaccept,
+    "Check that a callee's q8-q15 keep their values across coaccept()",
+    .ct_child_func = colocation_callee_saved_fp_worker,
+    .ct_xfail_reason =
+	"The cocall switcher restores q8-q15 from the wrong slots")
+{
+	void *target;
+	struct fp_q_value markers[FP_MARKER_COUNT];
+	struct fp_q_value values[FP_MARKER_COUNT];
+	intcap_t send_buf = 0;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		cocall_or_fail(target, &send_buf, sizeof(send_buf), values,
+		    sizeof(values));
+
+		build_fp_markers(markers);
+		check_fp_markers(markers, values, "coaccept");
+
+		cheribsdtest_success();
+	}
+}
+
 CHERIBSDTEST(colocation_callee_saved_gp_via_coaccept,
     "Check that a callee's c19-c28 keep their values across coaccept()",
     .ct_child_func = colocation_callee_saved_gp_worker)
@@ -667,6 +928,37 @@ CHERIBSDTEST(colocation_callee_saved_gp_via_coaccept,
 		    &response, sizeof(response));
 
 		check_gp_markers(response.markers, response.values, "coaccept");
+
+		cheribsdtest_success();
+	}
+}
+
+CHERIBSDTEST(colocation_fp_status_control_via_coaccept,
+    "Check that a callee's FPCR and FPSR keep their values across coaccept()",
+    .ct_child_func = colocation_fp_status_control_worker)
+{
+	void *target;
+	intcap_t send_buf = 0;
+	struct fp_status_control values;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		cocall_or_fail(target, &send_buf, sizeof(send_buf), &values,
+		    sizeof(values));
+
+		check_scalar_marker("FPCR", fp_status_control_markers.fpcr,
+		    values.fpcr, "coaccept");
+		check_scalar_marker("FPSR", fp_status_control_markers.fpsr,
+		    values.fpsr, "coaccept");
 
 		cheribsdtest_success();
 	}
