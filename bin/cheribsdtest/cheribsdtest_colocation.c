@@ -605,6 +605,19 @@ check_named_scalar_match(const char *name, unsigned long want,
 	    name, across, got, want);
 }
 
+/*
+ * Compare a single named capability (e.g., "CTPIDR_EL0") against an
+ * expected value using exact tag/bounds/perms/address equality.
+ */
+static void
+check_named_cap_match(const char *name, void *want, void *got,
+    const char *across)
+{
+	CHERIBSDTEST_VERIFY2(__builtin_cheri_equal_exact(got, want),
+	    "%s not preserved across %s: got=%#p want=%#p",
+	    name, across, got, want);
+}
+
 static void
 load_fp_status_control(unsigned long fpcr, unsigned long fpsr)
 {
@@ -621,6 +634,15 @@ read_fp_status_control(unsigned long *fpcr, unsigned long *fpsr)
 	    "mrs %0, fpcr\n\t"
 	    "mrs %1, fpsr"
 	    : "=r" (*fpcr), "=r" (*fpsr));
+}
+
+static void *
+read_ctpidr_el0(void)
+{
+	void *v;
+
+	__asm__ __volatile__ ("mrs %0, ctpidr_el0" : "=C" (v));
+	return (v);
 }
 
 /*
@@ -963,6 +985,104 @@ CHERIBSDTEST(colocation_fp_status_control_via_coaccept,
 		    "coaccept resumption");
 		check_named_scalar_match("FPSR", fpsr_want, fpcs_vals[1],
 		    "coaccept resumption");
+
+		cheribsdtest_success();
+	}
+}
+
+/*
+ * CTPIDR_EL0 is the capability TLS pointer; the cocall switcher
+ * explicitly saves and restores it.  Snapshot-before-and-after is the
+ * only safe pattern: mutating CTPIDR_EL0 to a non-TLS marker would
+ * fault any C code that touches errno, _trace_cocall, or stack
+ * canaries between the mutation and the restore.  The test catches
+ * the case where the switcher's save/restore is missing or broken --
+ * caller would resume with the callee's TLS pointer instead of its
+ * own, breaking every later TLS access.
+ */
+struct colocation_ctpidr_response {
+	void	*before;
+	void	*after;
+};
+
+static void
+colocation_ctpidr_worker(void)
+{
+	intcap_t recv_buf = 0;
+	struct colocation_ctpidr_response response;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGTEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	response.before = read_ctpidr_el0();
+
+	if (coaccept(NULL, &recv_buf, sizeof(recv_buf), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	response.after = read_ctpidr_el0();
+
+	if (coaccept(NULL, &response, sizeof(response), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	err(EX_SOFTWARE, "Second coaccept returned.");
+}
+
+CHERIBSDTEST(colocation_ctpidr_el0_via_cocall,
+    "Check CTPIDR_EL0 (capability TLS pointer) survives cocall round-trips",
+    .ct_child_func = colocation_register_worker)
+{
+	void *target;
+	void *before, *after;
+	intcap_t buf = 0;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGTEST_SERVICE, pid);
+
+		before = read_ctpidr_el0();
+		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+		after = read_ctpidr_el0();
+
+		check_named_cap_match("CTPIDR_EL0", before, after, "cocall");
+
+		cheribsdtest_success();
+	}
+}
+
+CHERIBSDTEST(colocation_ctpidr_el0_via_coaccept,
+    "Check CTPIDR_EL0 (capability TLS pointer) survives coaccept round-trips",
+    .ct_child_func = colocation_ctpidr_worker)
+{
+	void *target;
+	struct colocation_ctpidr_response response;
+	intcap_t send_buf = 0;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGTEST_SERVICE, pid);
+
+		cocall_or_fail(target, &send_buf, sizeof(send_buf),
+		    &response, sizeof(response));
+
+		check_named_cap_match("CTPIDR_EL0", response.before,
+		    response.after, "coaccept resumption");
 
 		cheribsdtest_success();
 	}
