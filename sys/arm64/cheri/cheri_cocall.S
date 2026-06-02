@@ -140,6 +140,18 @@ SIGCODE(switcher_cocall)
 	 * scb_borrower_td is not NULL, then the callee's thread
 	 * is returning to the callee and scb_borrower_thread
 	 * needs to be set to NULL in the callee's scb.
+	 *
+	 * XXX: This non-NULL branch silently assumes
+	 * scb_borrower_td equals the current caller's td
+	 * (i.e., the callee's thread is currently hosting
+	 * this caller's userspace) and does not verify it.
+	 * In the multi-client case scb_borrower_td may
+	 * instead be recording that an earlier, unrelated
+	 * caller's userspace is hosted on the callee's
+	 * thread; the unconditional clobber loses that record
+	 * and the next unborrow trips the SYS_copark KASSERT
+	 * in colocation_unborrow().  Reproducer: cheribsdtest
+	 * colocation_served_incumbent_unborrow.
 	 */
 	ldr	x9, SCB_BORROWER_TD(c8)
 	cbnz	x9, 5f
