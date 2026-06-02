@@ -577,6 +577,437 @@ CHERIBSDTEST(colocation_single_client_unborrow,
 	}
 }
 
+/*
+ * A test that panics or hangs the kernel stops the whole run, so these tests
+ * are skipped unless CHERIBSDTEST_RUN_PANICS is set.
+ */
+static const char *
+skip_known_panic(const struct cheri_test *ctp __unused)
+{
+	if (getenv("CHERIBSDTEST_RUN_PANICS") != NULL)
+		return (NULL);
+
+	return ("Panics or hangs the kernel; set CHERIBSDTEST_RUN_PANICS to "
+	    "run it");
+}
+
+/*
+ * A test child normally reports its result through ccsp, a page that it
+ * shares with the test process.  A coexec child is a new program with no
+ * pointer to that page, so cheribsdtest_failure_*() cannot report from it.
+ * This function therefore reports errors with err(3), and the test reads
+ * them from the child's exit status.
+ */
+static void *
+child_wait_for_service(const char *service)
+{
+	void *target;
+	int error;
+
+	if (cosetup(COSETUP_COCALL) != 0)
+		err(EX_OSERR, "cosetup_cocall");
+
+	while ((error = colookup(service, &target)) != 0 && errno == ESRCH)
+		;
+	if (error != 0)
+		err(EX_OSERR, "colookup");
+
+	return (target);
+}
+
+static void __dead2
+wait_then_check_pid(volatile int *barrier, pid_t my_pid)
+{
+	/*
+	 * The wait makes no syscall, because a syscall would move the caller's
+	 * code back to its own thread before the check.
+	 */
+	while (barrier != NULL && *barrier)
+		;
+	exit(getpid() == my_pid ? 0 : EX_SOFTWARE);
+}
+
+static void __dead2
+release_then_hold_thread(volatile int *barrier)
+{
+	if (barrier != NULL)
+		*barrier = 0;
+
+	/*
+	 * Only the child that reports the verdict exits, so this caller loops
+	 * until its parent kills it.  Sleeping would not work: sleep(3) and
+	 * pause(3) make a syscall, which moves the caller's code back to its
+	 * own thread and changes the state that the reporting child checks.
+	 */
+	for (;;)
+		;
+}
+
+/* True for the one child that wins the race to coregister the service. */
+static bool
+coregister_wins(const char *service)
+{
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup_coaccept");
+
+	if (coregister(service, NULL) == 0)
+		return (true);
+
+	if (errno != EEXIST)
+		err(EX_OSERR, "coregister");
+
+	return (false);
+}
+
+/*
+ * The multi-client tests run three colocated processes in one vmspace: B is
+ * the callee (the coregister winner), and A and C are callers, with kernel
+ * threads TA, TB, and TC.  A is the incumbent: the first caller B replies to,
+ * left hosted on TB.  C is the newcomer: the second caller, which cocalls B
+ * while TB is still borrowed.  B assigns each caller its role through the
+ * cocall buffer.  All three children run the test's dispatch function.
+ */
+enum co_message {
+	CO_INCUMBENT = 1,	/* not 0, so an unwritten buffer matches none */
+	CO_NEWCOMER,
+
+	/* A verdict that a callee relays to a caller. */
+	CO_PASS,
+	CO_FAIL,
+};
+
+struct caller_message {
+	volatile int	*barrier;
+	enum co_message	 role;
+};
+
+#define	COLOCATION_SERVED_INCUMBENT_SERVICE	"colocation_served_incumbent"
+
+static void __dead2
+served_incumbent_worker(void)
+{
+	/* Lowered by the newcomer once its cocall has returned. */
+	static volatile int barrier = 1;
+
+	struct caller_message msg;
+	int cocall_count;
+
+	cocall_count = 0;
+	for (;;) {
+		msg.barrier = &barrier;
+		/*
+		 * 1, not 0: coaccept() replies to the previous call, so the
+		 * first caller gets its reply from the second coaccept().
+		 */
+		msg.role = (cocall_count == 1) ? CO_INCUMBENT : CO_NEWCOMER;
+
+		if (coaccept(NULL, &msg, sizeof(msg), &msg, sizeof(msg)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		/*
+		 * Any syscall would do.  It moves B's code back to its own
+		 * thread TB, where B then replies.
+		 */
+		(void)getpid();
+
+		cocall_count++;
+	}
+}
+
+static void
+colocation_served_incumbent_dispatch(void)
+{
+	struct caller_message msg;
+	void *target;
+	pid_t my_pid;
+
+	if (coregister_wins(COLOCATION_SERVED_INCUMBENT_SERVICE))
+		served_incumbent_worker();	/* callee B */
+
+	target = child_wait_for_service(COLOCATION_SERVED_INCUMBENT_SERVICE);
+
+	my_pid = getpid();
+
+	msg.barrier = NULL;
+	msg.role = 0;
+	if (cocall(target, &msg, sizeof(msg), &msg, sizeof(msg)) < 0)
+		err(EX_OSERR, "cocall");
+
+	if (msg.role == CO_INCUMBENT)
+		wait_then_check_pid(msg.barrier, my_pid);	/* A */
+	else
+		release_then_hold_thread(msg.barrier);		/* C */
+}
+
+/* The reaped child's pid may since have been recycled, so skip it. */
+static void
+kill_colocation_children(const pid_t *children, int nchildren,
+    pid_t reaped_child)
+{
+	int i;
+
+	for (i = 0; i < nchildren; i++) {
+		if (children[i] == reaped_child)
+			continue;
+
+		(void)kill(children[i], SIGKILL);
+		(void)waitpid(children[i], NULL, 0);
+	}
+}
+
+/*
+ * Forks nchildren that coexec into this vmspace and run the test's child
+ * function.  Exactly one child exits, with the verdict: status zero passes.
+ * If the test passes, the rest are killed.  If it fails, they are left
+ * running, because killing a colocated process during a cocall can hang or
+ * panic the kernel before cheribsdtest reports the verdict.
+ */
+static void
+colocation_coexec_run(int nchildren, const char *failure_message)
+{
+	pid_t children[8], reaped_child;
+	int i, status;
+
+	CHERIBSDTEST_VERIFY2(nchildren <= (int)nitems(children),
+	    "nchildren %d too large", nchildren);
+
+	for (i = 0; i < nchildren; i++) {
+		children[i] = fork();
+		if (children[i] == -1)
+			cheribsdtest_failure_err("fork %d", i);
+
+		if (children[i] == 0)
+			cheribsdtest_coexec_child();
+	}
+
+	reaped_child = wait(&status);
+
+	CHERIBSDTEST_VERIFY2(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+	    "%s: child pid %d status 0x%x", failure_message,
+	    reaped_child, status);
+
+	kill_colocation_children(children, nchildren, reaped_child);
+	cheribsdtest_success();
+}
+
+/*
+ *	A>B
+ *	B@
+ *	A<B	=> {TB->A}
+ *	C>B	=> {TB->A, TC->B, (C)}
+ *	B@
+ *	C<B
+ *	A@	|= {TA->A}
+ *
+ * The newcomer has been served (C<B) before the incumbent's syscall.  Property
+ * under test: the incumbent's later syscall still unborrows it back onto its
+ * own thread TA.
+ */
+CHERIBSDTEST(colocation_served_incumbent_unborrow,
+    "Check that, after a second caller has been served by the same callee, "
+    "the first caller's next syscall runs on its own thread as itself "
+    "(multi-client cocall)",
+    .ct_child_func = colocation_served_incumbent_dispatch,
+    .ct_check_skip = skip_known_panic,
+    .ct_xfail_reason =
+	"Multi-client cocall is not yet supported: a second caller's cocall "
+	"clears the first caller's borrow record")
+{
+	colocation_coexec_run(3, "incumbent saw the wrong pid");
+}
+
+#define	COLOCATION_PENDING_CALLEE_SERVICE	"colocation_pending_callee"
+
+static void __dead2
+pending_callee_worker(void)
+{
+	intcap_t buf;
+	pid_t my_pid, observed_pid;
+	int cocall_count;
+
+	my_pid = getpid();
+
+	cocall_count = 0;
+	buf = CO_INCUMBENT;
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		cocall_count++;
+
+		/*
+		 * Serving A, this moves B back to TB before the reply.  Serving
+		 * C, B runs on TC while TB hosts A, so the kernel must evict A
+		 * to move B back, and the syscall must then run as B.
+		 */
+		observed_pid = getpid();
+
+		if (cocall_count == 1)
+			buf = CO_INCUMBENT;
+		else
+			buf = (observed_pid == my_pid) ? CO_PASS : CO_FAIL;
+	}
+}
+
+static void
+colocation_pending_callee_dispatch(void)
+{
+	intcap_t buf;
+	void *target;
+	pid_t my_pid;
+
+	if (coregister_wins(COLOCATION_PENDING_CALLEE_SERVICE))
+		pending_callee_worker();	/* callee B */
+
+	target = child_wait_for_service(COLOCATION_PENDING_CALLEE_SERVICE);
+
+	my_pid = getpid();
+
+	buf = 0;
+	if (cocall(target, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "cocall");
+
+	switch ((int)buf) {
+	case CO_INCUMBENT:	/* A */
+		release_then_hold_thread(NULL);
+	case CO_PASS:		/* C, after B's check passed */
+		wait_then_check_pid(NULL, my_pid);
+	case CO_FAIL:		/* C, after B's check failed */
+		exit(EX_SOFTWARE);
+	default:
+		errx(EX_SOFTWARE, "unexpected verdict %d", (int)buf);
+	}
+}
+
+/*
+ *	A>B
+ *	B@
+ *	A<B	=> {TB->A}
+ *	C>B	=> {TB->A, TC->B, (C)}
+ *	B@	|= {TB->B}
+ *	C<B
+ *	C@	|= {TC->C}
+ *
+ * Property under test: the callee's own syscall while serving the newcomer
+ * must unborrow B back onto its home thread TB and run in B's process context,
+ * which requires evicting the incumbent hosted on TB.  The newcomer's syscall
+ * after the reply must then run as C.
+ */
+CHERIBSDTEST(colocation_pending_callee_unborrow,
+    "Check that, with a first caller hosted on the callee's thread, the "
+    "callee's syscall while it serves a second caller runs as the callee, "
+    "and the second caller's next syscall runs as the second caller "
+    "(multi-client cocall)",
+    .ct_child_func = colocation_pending_callee_dispatch,
+    .ct_check_skip = skip_known_panic,
+    .ct_xfail_reason =
+	"Multi-client cocall is not yet supported: a second caller's cocall "
+	"clears the first caller's borrow record, and nothing evicts the first "
+	"caller from the callee's home thread")
+{
+	/*
+	 * XXX: the check fails with a wrong pid, and the failing test leaves
+	 * the incumbent hosted on TB.  A later SIGKILL to the incumbent hits
+	 * a separate bug that hangs or panics the kernel, so the test is
+	 * skipped as a panic.
+	 */
+	colocation_coexec_run(3, "callee saw the wrong pid");
+}
+
+#define	COLOCATION_PENDING_INCUMBENT_SERVICE	"colocation_pending_incumbent"
+
+static void __dead2
+pending_incumbent_worker(void)
+{
+	static volatile int barrier = 1;
+
+	struct caller_message msg;
+	int cocall_count;
+
+	cocall_count = 0;
+	for (;;) {
+		msg.barrier = &barrier;
+		msg.role = (cocall_count == 1) ? CO_INCUMBENT : CO_NEWCOMER;
+
+		if (coaccept(NULL, &msg, sizeof(msg), &msg, sizeof(msg)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		if (cocall_count == 0) {
+			/*
+			 * Any syscall would do.  It moves B's code back to
+			 * its own thread TB, where B then replies.
+			 */
+			(void)getpid();
+			cocall_count++;
+		} else {
+			/* Release A without a syscall, which would move B. */
+			barrier = 0;
+
+			/* Never reply, so that C's cocall stays pending. */
+			for (;;)
+				;
+		}
+	}
+}
+
+static void
+colocation_pending_incumbent_dispatch(void)
+{
+	struct caller_message msg;
+	void *target;
+	pid_t my_pid;
+
+	if (coregister_wins(COLOCATION_PENDING_INCUMBENT_SERVICE))
+		pending_incumbent_worker();	/* callee B */
+
+	target = child_wait_for_service(COLOCATION_PENDING_INCUMBENT_SERVICE);
+
+	my_pid = getpid();
+
+	msg.barrier = NULL;
+	msg.role = 0;
+	if (cocall(target, &msg, sizeof(msg), &msg, sizeof(msg)) < 0)
+		err(EX_OSERR, "cocall");
+
+	/*
+	 * B never replies to C, so only A gets here.  A reports the verdict:
+	 * its syscall must run as A.
+	 */
+	if (msg.role != CO_INCUMBENT)
+		errx(EX_SOFTWARE, "newcomer's cocall returned");
+
+	wait_then_check_pid(msg.barrier, my_pid);
+}
+
+/*
+ *	A>B
+ *	B@
+ *	A<B	=> {TB->A}
+ *	C>B	=> {TB->A, TC->B, (C)}
+ *	A@	|= {TA->A}
+ *
+ * Property under test: a newcomer whose cocall is still pending must not
+ * prevent the incumbent's syscall from unborrowing back to its own thread.
+ */
+CHERIBSDTEST(colocation_pending_incumbent_unborrow,
+    "Check that, while a second caller's cocall to the same callee is still "
+    "pending, the first caller's next syscall runs on its own thread as "
+    "itself (multi-client cocall)",
+    .ct_child_func = colocation_pending_incumbent_dispatch,
+    .ct_check_skip = skip_known_panic,
+    .ct_xfail_reason =
+	"Multi-client cocall is not yet supported: a second caller's cocall "
+	"clears the first caller's borrow record")
+{
+	/*
+	 * XXX: on SMP, both callers' cocalls can enter B at once, because the
+	 * switcher's lock is a plain load and store.  The test then hangs
+	 * until cheribsdtest times it out, and a later SIGKILL to its
+	 * remaining processes panics the kernel.
+	 */
+	colocation_coexec_run(3, "incumbent saw the wrong pid");
+}
+
 #endif /* !CHERIBSD_C18N_TESTS */
 
 #if defined(__aarch64__)

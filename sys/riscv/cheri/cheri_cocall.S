@@ -109,6 +109,21 @@ SIGCODE(switcher_cocall)
 	 * scb_borrower_td is not NULL, then the callee's thread
 	 * is returning to the callee and scb_borrower_thread
 	 * needs to be set to NULL in the callee's scb.
+	 *
+	 * XXX: The non-NULL branch assumes that the callee's
+	 * thread hosts this caller's code, and clears the
+	 * borrow record without checking.  Say A cocalls B, and
+	 * B's reply leaves A's code on B's thread.  If C then
+	 * cocalls B, this branch clears the record that A's
+	 * code is on B's thread.  What A's next syscall then
+	 * does depends on whether B has replied to C:
+	 *
+	 *  - Before the reply, the syscall runs as B.  See
+	 *    cheribsdtest colocation_pending_incumbent_unborrow.
+	 *
+	 *  - After the reply, the syscall trips the SYS_copark
+	 *    KASSERT in colocation_unborrow().  See cheribsdtest
+	 *    colocation_served_incumbent_unborrow.
 	 */
 	clc	ct1, SCB_BORROWER_TD(callee)
 	bnez	t1, 5f

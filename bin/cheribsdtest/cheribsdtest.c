@@ -127,6 +127,9 @@ usage(void)
 "    -Q  -- Enable qemu tracing in test process (user-mode only)\n"
 "    -v  -- Increase verbosity\n"
 "    -x  -- Output JUnit XML format\n"
+"\n"
+"environment:\n"
+"    CHERIBSDTEST_RUN_PANICS  -- Run tests that can panic or hang the kernel\n"
 	     );
 	exit(EX_USAGE);
 }
