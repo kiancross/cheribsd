@@ -494,6 +494,89 @@ CHERIBSDTEST(colocation_callee_cpu_time,
 	}
 }
 
+#define	COLOCATION_SINGLE_CLIENT_SERVICE	"colocation_single_client"
+
+static void
+colocation_single_client_worker(void)
+{
+	intcap_t buf = 0;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_SINGLE_CLIENT_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	/* B's syscall while hosted on TA; the reply carries the pid it sees. */
+	buf = getpid();
+
+	if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	errx(EX_SOFTWARE, "second coaccept returned");
+}
+
+/*
+ * Trace notation, used by the tests below:
+ *
+ *	A>B	A cocalls B.
+ *	A<B	B replies to A, through its next coaccept.
+ *	X@	X unborrows: the kernel moves X's code back to X's own
+ *		thread.  The tests trigger it with a syscall.
+ *	TB->A	A's code runs on B's thread TB.
+ *	(A)	A is blocked in its cocall.
+ *	=>	the state that a step results in, listing only processes
+ *		away from home.
+ *	|=	the state that the test asserts.
+ */
+
+/*
+ *	A>B	=> {TA->B, (A)}
+ *	B@	|= {TB->B}
+ *	A<B	=> {TB->A}
+ *	A@	|= {TA->A}
+ */
+CHERIBSDTEST(colocation_single_client_unborrow,
+    "Check that a callee's syscall during a cocall and its caller's next "
+    "syscall each run as their own process",
+    .ct_child_func = colocation_single_client_worker)
+{
+	void *target;
+	intcap_t buf = 0;
+	pid_t pid, my_pid, observed_pid;
+
+	my_pid = getpid();
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_SINGLE_CLIENT_SERVICE,
+		    pid);
+
+		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+
+		CHERIBSDTEST_VERIFY2((pid_t)buf == pid,
+		    "callee's unborrow returned wrong pid: got %d, expected %d",
+		    (pid_t)buf, pid);
+
+		/* A's first syscall after the reply, while hosted on TB. */
+		observed_pid = getpid();
+
+		CHERIBSDTEST_VERIFY2(observed_pid == my_pid,
+		    "unborrow returned wrong pid: got %d, expected %d",
+		    observed_pid, my_pid);
+
+		cheribsdtest_success();
+	}
+}
+
 #endif /* !CHERIBSD_C18N_TESTS */
 
 #if defined(__aarch64__)
