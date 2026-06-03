@@ -435,33 +435,6 @@ CHERIBSDTEST(colocation_accounting,
 
 #endif /* !CHERIBSD_C18N_TESTS */
 
-#if defined(__aarch64__)
-/*
- * Tests for callee-saved register preservation across the cocall
- * fast-path domain transition.  Each test loads marker values into
- * a set of registers, drives a cocall, and verifies what survived.
- */
-
-#define	COLOCATION_REGTEST_SERVICE	"colocation_register"
-
-static void
-colocation_register_worker(void)
-{
-	intcap_t buf = 0;
-
-	if (cosetup(COSETUP_COACCEPT) != 0)
-		err(EX_OSERR, "cosetup");
-
-	if (coregister(COLOCATION_REGTEST_SERVICE, NULL) != 0)
-		err(EX_OSERR, "coregister");
-
-	for (;;) {
-		if (coaccept(NULL, &buf, sizeof(buf), &buf,
-		    sizeof(buf)) < 0)
-			err(EX_OSERR, "coaccept");
-	}
-}
-
 static void *
 wait_for_service(const char *service, pid_t worker)
 {
@@ -495,6 +468,116 @@ cocall_or_fail(void *target, void *send_buf, size_t send_size,
 {
 	if (cocall(target, send_buf, send_size, recv_buf, recv_size) < 0)
 		cheribsdtest_failure_err("cocall");
+}
+
+/* Excluded under c18n: a separate cocall fast-path issue causes SIGILL. */
+#ifndef CHERIBSD_C18N_TESTS
+
+#define	COLOCATION_SINGLE_CLIENT_SERVICE	"colocation_single_client"
+
+static void
+colocation_single_client_worker(void)
+{
+	intcap_t buf = 0;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_SINGLE_CLIENT_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	/*
+	 * This syscall unborrows B onto its home thread TB so the next coaccept
+	 * hands the caller's context onto TB.
+	 */
+	(void)getpid();
+
+	if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	err(EX_SOFTWARE, "second coaccept returned");
+}
+
+/*
+ * Confirms the borrow/unborrow round trip is correct with a single
+ * uncontended borrower.
+ *
+ *	A>B
+ *	B@
+ *	A<B	=> {TB->A}
+ *	A@	|= {TA->A}
+ */
+CHERIBSDTEST(colocation_single_client_unborrow,
+    "A single caller's syscall after a cocall round trip must unborrow back "
+    "to its own thread and see its own pid",
+    .ct_child_func = colocation_single_client_worker)
+{
+	void *target;
+	intcap_t buf = 0;
+	pid_t pid, my_pid, observed;
+
+	my_pid = getpid();
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_SINGLE_CLIENT_SERVICE,
+		    pid);
+
+		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+
+		/*
+		 * Back from the cocall, now running on the callee's thread TB.
+		 * This syscall must unborrow us back onto our own thread and
+		 * run in our own process context.
+		 */
+		observed = getpid();
+
+		(void)kill(pid, SIGKILL);
+		(void)waitpid(pid, NULL, 0);
+
+		CHERIBSDTEST_VERIFY2(observed == my_pid,
+		    "unborrow returned wrong pid: got %d, expected %d",
+		    observed, my_pid);
+
+		cheribsdtest_success();
+	}
+}
+
+#endif /* !CHERIBSD_C18N_TESTS */
+
+#if defined(__aarch64__)
+/*
+ * Tests for callee-saved register preservation across the cocall
+ * fast-path domain transition.  Each test loads marker values into
+ * a set of registers, drives a cocall, and verifies what survived.
+ */
+
+#define	COLOCATION_REGTEST_SERVICE	"colocation_register"
+
+static void
+colocation_register_worker(void)
+{
+	intcap_t buf = 0;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGTEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf,
+		    sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+	}
 }
 
 /*
