@@ -44,6 +44,8 @@
 #include <machine/asm.h>
 #include <sys/elf_common.h>
 
+#include "cheribsdtest_colocation_asm.h"
+
 /*
  * Stack frame of the GP and FP helpers, from sp upwards:
  *
@@ -269,5 +271,141 @@ ENTRY(coaccept_with_fp_markers)
 
 	RETURN
 END(coaccept_with_fp_markers)
+
+/*
+ * The direct helper's frame starts like the others.  Its saved registers
+ * are the caller's c19-c28, q8-q15, c29, CTPIDR_EL0, FPCR, and FPSR: it
+ * loads markers into all of them but c29, which blrs overwrites with the
+ * unsealed data capability.
+ */
+#define	DIRECT_GP_OFF		SAVED_REGS_OFF
+#define	DIRECT_FP_OFF		(DIRECT_GP_OFF + GP_SAVE_SIZE)
+#define	DIRECT_C29_OFF		(DIRECT_FP_OFF + FP_SAVE_SIZE)
+#define	DIRECT_CTPIDR_OFF	(DIRECT_C29_OFF + REG_WIDTH)
+#define	DIRECT_FPCR_OFF		(DIRECT_CTPIDR_OFF + REG_WIDTH)
+#define	DIRECT_FPSR_OFF		(DIRECT_FPCR_OFF + 8)
+#define	DIRECT_FRAME_SIZE	(DIRECT_FPSR_OFF + 8)
+
+/*
+ * ssize_t enter_switcher_with_markers(void *code, void *data,
+ *     void *target_or_cookiep, const struct switcher_regset *markers,
+ *     struct switcher_regset *values);
+ *
+ * Loads markers into c19-c28, q8-q15, FPCR, FPSR, and CTPIDR_EL0, enters
+ * the switcher through the sealed pair code and data, and stores those
+ * registers to values when the switcher returns.  The pair comes from
+ * _cosetup() and picks the direction: with a cocall pair,
+ * target_or_cookiep is the callee; with a coaccept pair, it is coaccept()'s
+ * cookiep argument, where the switcher stores a value identifying the
+ * caller (the tests pass NULL).  Returns the length received, or a negated
+ * errno.
+ *
+ * CTPIDR_EL0 is the TLS pointer, so no C code may run while it holds a
+ * marker.  The helper puts back the real CTPIDR_EL0, FPCR, and FPSR
+ * before it returns.
+ */
+ENTRY(enter_switcher_with_markers)
+	sub	REGN(sp), REGN(sp), #DIRECT_FRAME_SIZE
+	stp	xzr, xzr, [REGN(sp)]	/* send no stale stack data */
+	str	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	str	REG(4), [REGN(sp), #SAVED_VALUES_OFF]
+
+	stp	REG(19), REG(20), [REGN(sp), #DIRECT_GP_OFF]
+	stp	REG(21), REG(22), [REGN(sp), #(DIRECT_GP_OFF + 2 * REG_WIDTH)]
+	stp	REG(23), REG(24), [REGN(sp), #(DIRECT_GP_OFF + 4 * REG_WIDTH)]
+	stp	REG(25), REG(26), [REGN(sp), #(DIRECT_GP_OFF + 6 * REG_WIDTH)]
+	stp	REG(27), REG(28), [REGN(sp), #(DIRECT_GP_OFF + 8 * REG_WIDTH)]
+
+	stp	q8,  q9,  [REGN(sp), #DIRECT_FP_OFF]
+	stp	q10, q11, [REGN(sp), #(DIRECT_FP_OFF + 2 * Q_WIDTH)]
+	stp	q12, q13, [REGN(sp), #(DIRECT_FP_OFF + 4 * Q_WIDTH)]
+	stp	q14, q15, [REGN(sp), #(DIRECT_FP_OFF + 6 * Q_WIDTH)]
+
+	str	REG(29), [REGN(sp), #DIRECT_C29_OFF]
+	mrs	REG(10), ctpidr_el0
+	str	REG(10), [REGN(sp), #DIRECT_CTPIDR_OFF]
+	mrs	x10, fpcr
+	str	x10, [REGN(sp), #DIRECT_FPCR_OFF]
+	mrs	x10, fpsr
+	str	x10, [REGN(sp), #DIRECT_FPSR_OFF]
+
+	ldp	REG(19), REG(20), [REG(3), #REGSET_GP_OFF]
+	ldp	REG(21), REG(22), [REG(3), #(REGSET_GP_OFF + 2 * REG_WIDTH)]
+	ldp	REG(23), REG(24), [REG(3), #(REGSET_GP_OFF + 4 * REG_WIDTH)]
+	ldp	REG(25), REG(26), [REG(3), #(REGSET_GP_OFF + 6 * REG_WIDTH)]
+	ldp	REG(27), REG(28), [REG(3), #(REGSET_GP_OFF + 8 * REG_WIDTH)]
+
+	ldp	q8,  q9,  [REG(3), #REGSET_FP_OFF]
+	ldp	q10, q11, [REG(3), #(REGSET_FP_OFF + 2 * Q_WIDTH)]
+	ldp	q12, q13, [REG(3), #(REGSET_FP_OFF + 4 * Q_WIDTH)]
+	ldp	q14, q15, [REG(3), #(REGSET_FP_OFF + 6 * Q_WIDTH)]
+
+	ldr	x10, [REG(3), #REGSET_FPCR_OFF]
+	msr	fpcr, x10
+	ldr	x10, [REG(3), #REGSET_FPSR_OFF]
+	msr	fpsr, x10
+
+	/* Nothing may use TLS until the real CTPIDR_EL0 is back. */
+	ldr	REG(10), [REG(3), #REGSET_CTPIDR_OFF]
+	msr	ctpidr_el0, REG(10)
+
+	/* The switcher's outbuf, outlen, inbuf, and inlen. */
+	mov	REG(3), REGN(sp)
+	mov	x4, #SCRATCH_SIZE
+	mov	REG(5), REGN(sp)
+	mov	x6, #SCRATCH_SIZE
+	blrs	REG(29), REG(0), REG(1)
+
+	/*
+	 * The switcher returns an errno in x0 with the carry flag set, like a
+	 * syscall.  Return it negated, so that the caller can tell EAGAIN from
+	 * a length.
+	 */
+	cneg	x0, x0, cs
+
+	/* Store the registers to values before restoring the caller's. */
+	ldr	REG(9), [REGN(sp), #SAVED_VALUES_OFF]
+	stp	REG(19), REG(20), [REG(9), #REGSET_GP_OFF]
+	stp	REG(21), REG(22), [REG(9), #(REGSET_GP_OFF + 2 * REG_WIDTH)]
+	stp	REG(23), REG(24), [REG(9), #(REGSET_GP_OFF + 4 * REG_WIDTH)]
+	stp	REG(25), REG(26), [REG(9), #(REGSET_GP_OFF + 6 * REG_WIDTH)]
+	stp	REG(27), REG(28), [REG(9), #(REGSET_GP_OFF + 8 * REG_WIDTH)]
+
+	stp	q8,  q9,  [REG(9), #REGSET_FP_OFF]
+	stp	q10, q11, [REG(9), #(REGSET_FP_OFF + 2 * Q_WIDTH)]
+	stp	q12, q13, [REG(9), #(REGSET_FP_OFF + 4 * Q_WIDTH)]
+	stp	q14, q15, [REG(9), #(REGSET_FP_OFF + 6 * Q_WIDTH)]
+
+	mrs	x10, fpcr
+	str	x10, [REG(9), #REGSET_FPCR_OFF]
+	mrs	x10, fpsr
+	str	x10, [REG(9), #REGSET_FPSR_OFF]
+	mrs	REG(10), ctpidr_el0
+	str	REG(10), [REG(9), #REGSET_CTPIDR_OFF]
+
+	ldr	REG(10), [REGN(sp), #DIRECT_CTPIDR_OFF]
+	msr	ctpidr_el0, REG(10)
+	ldr	x10, [REGN(sp), #DIRECT_FPCR_OFF]
+	msr	fpcr, x10
+	ldr	x10, [REGN(sp), #DIRECT_FPSR_OFF]
+	msr	fpsr, x10
+	ldr	REG(29), [REGN(sp), #DIRECT_C29_OFF]
+
+	ldp	REG(19), REG(20), [REGN(sp), #DIRECT_GP_OFF]
+	ldp	REG(21), REG(22), [REGN(sp), #(DIRECT_GP_OFF + 2 * REG_WIDTH)]
+	ldp	REG(23), REG(24), [REGN(sp), #(DIRECT_GP_OFF + 4 * REG_WIDTH)]
+	ldp	REG(25), REG(26), [REGN(sp), #(DIRECT_GP_OFF + 6 * REG_WIDTH)]
+	ldp	REG(27), REG(28), [REGN(sp), #(DIRECT_GP_OFF + 8 * REG_WIDTH)]
+
+	ldp	q8,  q9,  [REGN(sp), #DIRECT_FP_OFF]
+	ldp	q10, q11, [REGN(sp), #(DIRECT_FP_OFF + 2 * Q_WIDTH)]
+	ldp	q12, q13, [REGN(sp), #(DIRECT_FP_OFF + 4 * Q_WIDTH)]
+	ldp	q14, q15, [REGN(sp), #(DIRECT_FP_OFF + 6 * Q_WIDTH)]
+
+	ldr	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	add	REGN(sp), REGN(sp), #DIRECT_FRAME_SIZE
+
+	RETURN
+END(enter_switcher_with_markers)
 
 GNU_PROPERTY_AARCH64_FEATURE_1_NOTE(GNU_PROPERTY_AARCH64_FEATURE_1_VAL)
