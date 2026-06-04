@@ -64,6 +64,10 @@
 
 #include "cheribsdtest.h"
 
+#if defined(__aarch64__)
+#include "cheribsdtest_colocation_asm.h"
+#endif
+
 static bool
 is_colocated_with_parent(void)
 {
@@ -1256,6 +1260,229 @@ CHERIBSDTEST(colocation_stack_table_via_coaccept,
 {
 	check_register_across_coaccept("library stack", check_same_stack);
 }
+
+/*
+ * Excluded under c18n, where a bug causes a cocall to fault.
+ */
+#ifndef CHERIBSD_C18N_TESTS
+
+/*
+ * Tests that enter the switcher with no C code between loading the
+ * markers and reading the registers back.  A libc wrapper that keeps a
+ * register in its own frame hides a switcher bug in that register.
+ */
+
+/*
+ * The registers the direct tests check.  The stack pointer and the link
+ * register are left out because the helper needs them for itself.
+ */
+struct switcher_regset {
+	void			*gp[GP_MARKER_COUNT];
+	struct fp_q_value	fp[FP_MARKER_COUNT];
+	uint64_t		fpcr;
+	uint64_t		fpsr;
+	void			*ctpidr_el0;
+} __aligned(16);
+
+_Static_assert(__offsetof(struct switcher_regset, gp) == REGSET_GP_OFF,
+    "switcher_regset.gp offset must match REGSET_GP_OFF");
+
+_Static_assert(__offsetof(struct switcher_regset, fp) == REGSET_FP_OFF,
+    "switcher_regset.fp offset must match REGSET_FP_OFF");
+
+_Static_assert(__offsetof(struct switcher_regset, fpcr) == REGSET_FPCR_OFF,
+    "switcher_regset.fpcr offset must match REGSET_FPCR_OFF");
+
+_Static_assert(__offsetof(struct switcher_regset, fpsr) == REGSET_FPSR_OFF,
+    "switcher_regset.fpsr offset must match REGSET_FPSR_OFF");
+
+_Static_assert(__offsetof(struct switcher_regset, ctpidr_el0) ==
+    REGSET_CTPIDR_OFF,
+    "switcher_regset.ctpidr_el0 offset must match REGSET_CTPIDR_OFF");
+
+/* Defined in arm64/cheribsdtest_colocation_asm.S. */
+ssize_t	enter_switcher_with_markers(void *code, void *data,
+	    void *target_or_cookiep, const struct switcher_regset *markers,
+	    struct switcher_regset *values);
+
+/* One byte for each GP marker and one for the CTPIDR_EL0 marker. */
+#define	SWITCHER_MARKER_BYTE_COUNT	(GP_MARKER_COUNT + 1)
+
+static void
+build_switcher_regset_markers(struct switcher_regset *markers,
+    char *marker_bytes)
+{
+	build_gp_markers(markers->gp, marker_bytes);
+	build_fp_markers(markers->fp);
+	markers->fpcr = fp_status_control_markers.fpcr;
+	markers->fpsr = fp_status_control_markers.fpsr;
+
+	/*
+	 * The CTPIDR_EL0 marker points to a byte that no GP marker points to,
+	 * so the check fails if the switcher restores CTPIDR_EL0 from one of
+	 * c19-c28, or the reverse.
+	 */
+	markers->ctpidr_el0 = &marker_bytes[GP_MARKER_COUNT];
+}
+
+static void
+check_switcher_regset(const struct switcher_regset *want,
+    const struct switcher_regset *got, const char *across)
+{
+	check_gp_markers(want->gp, got->gp, across);
+	check_fp_markers(want->fp, got->fp, across);
+	check_scalar_marker("FPCR", want->fpcr, got->fpcr, across);
+	check_scalar_marker("FPSR", want->fpsr, got->fpsr, across);
+	check_same_capability("CTPIDR_EL0", want->ctpidr_el0, got->ctpidr_el0,
+	    across);
+}
+
+CHERIBSDTEST(colocation_switcher_cocall_direct,
+    "Check that the switcher keeps a caller's c19-c28, q8-q15, FPCR, FPSR "
+    "and CTPIDR_EL0 across a cocall, with no C frame that could restore a "
+    "lost value",
+    .ct_child_func = colocation_echo_worker,
+    .ct_xfail_reason =
+	"The cocall switcher restores q8-q15 from the wrong slots")
+{
+	void *target;
+	void *cocall_code;
+	void *cocall_data;
+	struct switcher_regset markers;
+	struct switcher_regset values;
+	char marker_bytes[SWITCHER_MARKER_BYTE_COUNT];
+	ssize_t ret;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		/*
+		 * cosetup() keeps the sealed pair in variables private to
+		 * libsys, so get a copy with the raw syscall.
+		 */
+		if (_cosetup(COSETUP_COCALL, &cocall_code, &cocall_data) != 0)
+			cheribsdtest_failure_err("_cosetup");
+
+		build_switcher_regset_markers(&markers, marker_bytes);
+
+		/*
+		 * The switcher returns EAGAIN until the worker waits in its
+		 * first coaccept.  Retry, as libc's cocall() does.
+		 */
+		for (;;) {
+			ret = enter_switcher_with_markers(cocall_code,
+			    cocall_data, target, &markers, &values);
+
+			if (ret != -EAGAIN)
+				break;
+
+			usleep(1000);
+		}
+
+		if (ret < 0)
+			cheribsdtest_failure_errc((int)-ret,
+			    "enter_switcher_with_markers");
+
+		check_switcher_regset(&markers, &values, "direct cocall");
+
+		cheribsdtest_success();
+	}
+}
+
+/*
+ * The worker's reply: the markers and the values of the registers after the
+ * coaccept.  A coexec child can report only through its exit status, so the
+ * worker sends both to the test, which does the check and names any register
+ * that changed.  The test cannot build the markers itself, because some of
+ * them point into the worker's stack.
+ */
+struct colocation_switcher_response {
+	struct switcher_regset	markers;
+	struct switcher_regset	values;
+};
+
+static void
+colocation_switcher_coaccept_direct_worker(void)
+{
+	intcap_t recv_buf = 0;
+	struct colocation_switcher_response response;
+	void *coaccept_code;
+	void *coaccept_data;
+	char marker_bytes[SWITCHER_MARKER_BYTE_COUNT];
+	ssize_t ret;
+
+	/*
+	 * cosetup() keeps the sealed pair in variables private to libsys, so
+	 * get a copy with the raw syscall.
+	 */
+	if (_cosetup(COSETUP_COACCEPT, &coaccept_code, &coaccept_data) != 0)
+		err(EX_OSERR, "_cosetup");
+
+	if (coregister(COLOCATION_REGISTER_TEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	build_switcher_regset_markers(&response.markers, marker_bytes);
+
+	ret = enter_switcher_with_markers(coaccept_code, coaccept_data, NULL,
+	    &response.markers, &response.values);
+
+	if (ret < 0)
+		errc(EX_OSERR, (int)-ret, "enter_switcher_with_markers");
+
+	if (_coaccept(coaccept_code, coaccept_data, NULL, &response,
+	    sizeof(response), &recv_buf, sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "_coaccept");
+
+	errx(EX_SOFTWARE, "second coaccept returned");
+}
+
+CHERIBSDTEST(colocation_switcher_coaccept_direct,
+    "Check that the switcher keeps a callee's c19-c28, q8-q15, FPCR, FPSR "
+    "and CTPIDR_EL0 across a coaccept, with no C frame that could restore a "
+    "lost value",
+    .ct_child_func = colocation_switcher_coaccept_direct_worker,
+    .ct_xfail_reason =
+	"The cocall switcher restores q8-q15 from the wrong slots")
+{
+	void *target;
+	intcap_t send_buf = 0;
+	struct colocation_switcher_response response;
+	pid_t pid;
+
+	/*
+	 * Start the reply with untagged markers, which fail the check, so
+	 * that only a correct reply from the worker passes.
+	 */
+	memset(&response, 0, sizeof(response));
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		cocall_or_fail(target, &send_buf, sizeof(send_buf),
+		    &response, sizeof(response));
+
+		check_switcher_regset(&response.markers, &response.values,
+		    "direct coaccept");
+
+		cheribsdtest_success();
+	}
+}
+#endif /* !CHERIBSD_C18N_TESTS */
 #endif /* defined(__aarch64__) */
 #endif
 
