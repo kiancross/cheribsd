@@ -71,6 +71,8 @@
 #include <machine/asm.h>
 #include <sys/elf_common.h>
 
+#include "cheribsdtest_colocation_asm.h"
+
 /*
  * Common stack frame layout used by all helpers:
  *
@@ -334,5 +336,223 @@ ENTRY(fp_register_check_via_coaccept)
 
 	RETURN
 END(fp_register_check_via_coaccept)
+
+/*
+ * Direct switcher entry helper.
+ *
+ * The helpers above all go through libsys' cocall/coaccept C
+ * wrappers, which means the wrapper's AAPCS prologue/epilogue saves
+ * and restores the very registers we are trying to test -- a
+ * switcher bug that mishandles c19-c28 / q8-q15 is silently papered
+ * over by the wrapper, and the via_cocall / via_coaccept tests
+ * still pass.
+ *
+ * The helper below skips the C wrapper and branches into the
+ * switcher entry directly via blrs, the same way the _cocall.S /
+ * _coaccept.S trampolines do.  Whether it enters switcher_cocall or
+ * switcher_coaccept is decided entirely by which sealed code+data
+ * pair the C caller obtained from _cosetup() and passed in, so one
+ * helper serves both directions.  The only AAPCS-compliant code on
+ * the path between marker load and post-switcher snapshot is the
+ * helper itself, and it deliberately performs the load AFTER its own
+ * callee-saved save and the snapshot BEFORE its restore, so anything
+ * the switcher loses on the round trip is visible to the test.
+ *
+ * Markers cover the full set tracked by the switcher in one shot:
+ * c19-c28, q8-q15, FPCR, FPSR, and CTPIDR_EL0.  The helper must
+ * save, stage and restore the full set regardless of which class is
+ * under test, so covering them all in one invocation is free.
+ *
+ * Mutating CTPIDR_EL0 to a non-TLS marker would fault any C code
+ * that touches errno, _trace_cocall, stack canaries, or compiler-
+ * emitted TLS lookups, so the marker load and the snapshot live
+ * inside the asm helper without any C between them, and the helper
+ * restores the real CTPIDR_EL0 (saved on entry) before returning to
+ * its C caller.  FPCR / FPSR are restored on the same principle to
+ * avoid contaminating the caller's FP state.
+ */
+
+/*
+ * DSWI (direct-switcher) helper frame layout (offsets from csp):
+ *
+ *   [DSWI_SCRATCH_OFF .. +16) : 16-byte outbuf/inbuf scratch
+ *   [DSWI_CTPIDR_OFF  .. +16) : saved real CTPIDR_EL0 (capability)
+ *   [DSWI_FPCR_OFF    .. +8)  : saved real FPCR
+ *   [DSWI_FPSR_OFF    .. +8)  : saved real FPSR
+ *   [DSWI_LR_OFF      .. +16) : saved clr
+ *   [DSWI_VALS_OFF    .. +16) : saved vals pointer
+ *   [DSWI_FP29_OFF    .. +16) : saved c29 (frame pointer; the
+ *                                switcher tail clears x29 on the way
+ *                                back so we have to reinstate it)
+ *   [DSWI_GP_OFF   .. +160)   : saved caller's c19-c28
+ *   [DSWI_FP_OFF   .. +128)   : saved caller's q8-q15
+ *
+ * Frame size 384 keeps csp 16-byte aligned.  The DSWI_* frame
+ * offsets are local to this helper; the struct switcher_regset
+ * offsets it reads and writes are the SR_* constants from
+ * cheribsdtest_colocation_asm.h.
+ */
+#define	DSWI_SCRATCH_OFF	0
+#define	DSWI_CTPIDR_OFF		16
+#define	DSWI_FPCR_OFF		32
+#define	DSWI_FPSR_OFF		40
+#define	DSWI_LR_OFF		48
+#define	DSWI_VALS_OFF		64
+#define	DSWI_FP29_OFF		80
+#define	DSWI_GP_OFF		96
+#define	DSWI_FP_OFF		256
+#define	DSWI_FRAME_SIZE		384
+
+/*
+ * ssize_t switcher_entry_check_direct(void *code, void *data,
+ *     void *target_or_cookiep,
+ *     const struct switcher_regset *markers,
+ *     struct switcher_regset *vals);
+ *
+ * On entry: c0/c1 = the sealed code+data pair from _cosetup(), c3 =
+ * markers, c4 = vals.  c2 is forwarded to the switcher untouched:
+ * with a COSETUP_COCALL pair it is the sealed callee SCB to call;
+ * with a COSETUP_COACCEPT pair it is the cookie pointer (the C
+ * caller passes NULL, and the first coaccept on a thread parks via
+ * copark(2) until a cocall arrives).  Returns the received length,
+ * or a negated errno on failure.
+ */
+ENTRY(switcher_entry_check_direct)
+	sub	csp, csp, #DSWI_FRAME_SIZE
+
+	str	clr, [csp, #DSWI_LR_OFF]
+	str	c29, [csp, #DSWI_FP29_OFF]
+	str	c4,  [csp, #DSWI_VALS_OFF]
+
+	/*
+	 * Snapshot the real CTPIDR_EL0 / FPCR / FPSR so we can put
+	 * them back before any C code resumes.
+	 */
+	mrs	c10, ctpidr_el0
+	str	c10, [csp, #DSWI_CTPIDR_OFF]
+	mrs	x10, fpcr
+	str	x10, [csp, #DSWI_FPCR_OFF]
+	mrs	x10, fpsr
+	str	x10, [csp, #DSWI_FPSR_OFF]
+
+	stp	c19, c20, [csp, #DSWI_GP_OFF]
+	stp	c21, c22, [csp, #(DSWI_GP_OFF + 32)]
+	stp	c23, c24, [csp, #(DSWI_GP_OFF + 64)]
+	stp	c25, c26, [csp, #(DSWI_GP_OFF + 96)]
+	stp	c27, c28, [csp, #(DSWI_GP_OFF + 128)]
+
+	stp	q8,  q9,  [csp, #DSWI_FP_OFF]
+	stp	q10, q11, [csp, #(DSWI_FP_OFF + 32)]
+	stp	q12, q13, [csp, #(DSWI_FP_OFF + 64)]
+	stp	q14, q15, [csp, #(DSWI_FP_OFF + 96)]
+
+	/*
+	 * Load markers from c3 into c19-c28, q8-q15, FPCR, FPSR and
+	 * CTPIDR_EL0.  CTPIDR_EL0 goes last; from this point until
+	 * the post-snapshot restore below, no instruction may touch
+	 * TLS-backed state.
+	 */
+	ldp	c19, c20, [c3, #(SR_GP_OFF + 0)]
+	ldp	c21, c22, [c3, #(SR_GP_OFF + 32)]
+	ldp	c23, c24, [c3, #(SR_GP_OFF + 64)]
+	ldp	c25, c26, [c3, #(SR_GP_OFF + 96)]
+	ldp	c27, c28, [c3, #(SR_GP_OFF + 128)]
+
+	ldp	q8,  q9,  [c3, #(SR_FP_OFF + 0)]
+	ldp	q10, q11, [c3, #(SR_FP_OFF + 32)]
+	ldp	q12, q13, [c3, #(SR_FP_OFF + 64)]
+	ldp	q14, q15, [c3, #(SR_FP_OFF + 96)]
+
+	ldr	x10, [c3, #SR_FPCR_OFF]
+	msr	fpcr, x10
+	ldr	x10, [c3, #SR_FPSR_OFF]
+	msr	fpsr, x10
+
+	ldr	c10, [c3, #SR_CTPIDR_OFF]
+	msr	ctpidr_el0, c10
+
+	/*
+	 * c0, c1 and c2 are already in place.  Set up the
+	 * data-transfer args using the in-frame scratch buffer for
+	 * both outbuf and inbuf.
+	 */
+	mov	c3, csp
+	mov	x4, #16
+	mov	c5, csp
+	mov	x6, #16
+
+	/*
+	 * Branch into the switcher.  blrs unseals the c0/c1 sealed
+	 * pair, sets PC to the unsealed code, c29 to the unsealed
+	 * data (this thread's SCB) and clr to the next-PC -- exactly
+	 * what libsys' _cocall / _coaccept do.
+	 */
+	blrs	c29, c0, c1
+
+	/*
+	 * The switcher reports failure the way a syscall does: carry
+	 * flag set and the errno value in x0 (the libsys trampolines
+	 * handle it with "b.cs cerror", like any syscall stub).  Fold
+	 * that into the return value -- negated errno on failure,
+	 * received length on success -- while the flags are still
+	 * fresh; nothing below touches x0 again.
+	 */
+	cneg	x0, x0, cs
+
+	/*
+	 * On return c19-c28, q8-q15, FPCR, FPSR and CTPIDR_EL0 should
+	 * each hold the marker we set, restored by the switcher from
+	 * the SCB it saved them into on the way in.  Snapshot them
+	 * BEFORE restoring the real values; the order matters -- a
+	 * snapshot taken after the restore would silently mask any
+	 * switcher bug.
+	 */
+	ldr	c10, [csp, #DSWI_VALS_OFF]
+
+	stp	c19, c20, [c10, #(SR_GP_OFF + 0)]
+	stp	c21, c22, [c10, #(SR_GP_OFF + 32)]
+	stp	c23, c24, [c10, #(SR_GP_OFF + 64)]
+	stp	c25, c26, [c10, #(SR_GP_OFF + 96)]
+	stp	c27, c28, [c10, #(SR_GP_OFF + 128)]
+
+	stp	q8,  q9,  [c10, #(SR_FP_OFF + 0)]
+	stp	q10, q11, [c10, #(SR_FP_OFF + 32)]
+	stp	q12, q13, [c10, #(SR_FP_OFF + 64)]
+	stp	q14, q15, [c10, #(SR_FP_OFF + 96)]
+
+	mrs	x11, fpcr
+	str	x11, [c10, #SR_FPCR_OFF]
+	mrs	x11, fpsr
+	str	x11, [c10, #SR_FPSR_OFF]
+
+	mrs	c11, ctpidr_el0
+	str	c11, [c10, #SR_CTPIDR_OFF]
+
+	/* Reinstate real CTPIDR_EL0 / FPCR / FPSR before any C runs. */
+	ldr	c11, [csp, #DSWI_CTPIDR_OFF]
+	msr	ctpidr_el0, c11
+	ldr	x11, [csp, #DSWI_FPCR_OFF]
+	msr	fpcr, x11
+	ldr	x11, [csp, #DSWI_FPSR_OFF]
+	msr	fpsr, x11
+
+	ldp	c19, c20, [csp, #DSWI_GP_OFF]
+	ldp	c21, c22, [csp, #(DSWI_GP_OFF + 32)]
+	ldp	c23, c24, [csp, #(DSWI_GP_OFF + 64)]
+	ldp	c25, c26, [csp, #(DSWI_GP_OFF + 96)]
+	ldp	c27, c28, [csp, #(DSWI_GP_OFF + 128)]
+
+	ldp	q8,  q9,  [csp, #DSWI_FP_OFF]
+	ldp	q10, q11, [csp, #(DSWI_FP_OFF + 32)]
+	ldp	q12, q13, [csp, #(DSWI_FP_OFF + 64)]
+	ldp	q14, q15, [csp, #(DSWI_FP_OFF + 96)]
+
+	ldr	clr, [csp, #DSWI_LR_OFF]
+	ldr	c29, [csp, #DSWI_FP29_OFF]
+
+	add	csp, csp, #DSWI_FRAME_SIZE
+
+	RETURN
+END(switcher_entry_check_direct)
 
 GNU_PROPERTY_AARCH64_FEATURE_1_NOTE(GNU_PROPERTY_AARCH64_FEATURE_1_VAL)

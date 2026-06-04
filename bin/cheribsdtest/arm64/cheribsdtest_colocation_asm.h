@@ -36,6 +36,21 @@
 #define	_CHERIBSDTEST_COLOCATION_ASM_H_
 
 /*
+ * Offsets into struct switcher_regset, shared between the direct-
+ * switcher asm helpers in cheribsdtest_colocation_asm.S and the C
+ * struct definition / _Static_asserts in cheribsdtest_colocation.c.
+ * Both sides reference the same names so changing a value in one
+ * place takes effect in both -- and a layout mismatch trips the
+ * _Static_asserts at compile time rather than producing a silently
+ * broken test.
+ */
+#define	SR_GP_OFF	0
+#define	SR_FP_OFF	160
+#define	SR_FPCR_OFF	288
+#define	SR_FPSR_OFF	296
+#define	SR_CTPIDR_OFF	304
+
+/*
  * Non-default but legal FPCR / FPSR values used as preservation
  * markers by the colocation register tests.  RMode = 0b01 (round
  * toward +inf) and IOC + IXC sticky flags raised.  Shared so every

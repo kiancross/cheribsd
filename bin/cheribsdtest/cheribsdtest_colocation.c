@@ -498,14 +498,22 @@ cocall_or_fail(void *target, void *send_buf, size_t send_size,
 }
 
 /*
- * Compare a single named capability (e.g., "CTPIDR_EL0") against an
- * expected value using exact tag/bounds/perms/address equality.
+ * Compare a single named capability (e.g., "CTPIDR_EL0") against an expected
+ * value using exact tag/bounds/perms/address equality.  With fatal=true,
+ * errx on mismatch; with fatal=false, return false instead.  Returns true
+ * on a match.
  */
-static void
+static bool
 check_named_cap_match(const char *name, void *want, void *got,
-    const char *across)
+    const char *across, bool fatal)
 {
-	CHERIBSDTEST_VERIFY2(__builtin_cheri_equal_exact(got, want),
+	if (__builtin_cheri_equal_exact(got, want))
+		return (true);
+
+	if (!fatal)
+		return (false);
+
+	cheribsdtest_failure_errx(
 	    "%s not preserved across %s: got=%#p want=%#p",
 	    name, across, got, want);
 }
@@ -587,33 +595,49 @@ build_gp_cap_markers(void *markers[GP_MARKER_COUNT], char *buf)
  * high halves) against the markers.  across is a short phrase
  * describing the round-trip path under test (e.g., "cocall" /
  * "coaccept resumption") that gets spliced into the failure message.
+ * With fatal=true, errx on the first mismatch; with fatal=false, just
+ * return false instead.  Returns true if every slot matches.
  */
-static void
+static bool
 check_q_match(const struct fp_q_slot want[8], const struct fp_q_slot got[8],
-    const char *across)
+    const char *across, bool fatal)
 {
 	int i;
 
 	for (i = 0; i < 8; i++) {
-		CHERIBSDTEST_VERIFY2(got[i].low == want[i].low &&
-		    got[i].high == want[i].high,
+		if (got[i].low == want[i].low && got[i].high == want[i].high)
+			continue;
+
+		if (!fatal)
+			return (false);
+
+		cheribsdtest_failure_errx(
 		    "q%d not preserved across %s: "
 		    "got={0x%lx, 0x%lx} want={0x%lx, 0x%lx}",
 		    i + 8, across,
 		    got[i].low, got[i].high,
 		    want[i].low, want[i].high);
 	}
+
+	return (true);
 }
 
 /*
  * Compare a single named scalar register (e.g., "FPCR", "FPSR")
- * against an expected value.
+ * against an expected value.  With fatal=true, errx on mismatch;
+ * with fatal=false, return false instead.  Returns true on a match.
  */
-static void
+static bool
 check_named_scalar_match(const char *name, unsigned long want,
-    unsigned long got, const char *across)
+    unsigned long got, const char *across, bool fatal)
 {
-	CHERIBSDTEST_VERIFY2(got == want,
+	if (got == want)
+		return (true);
+
+	if (!fatal)
+		return (false);
+
+	cheribsdtest_failure_errx(
 	    "%s not preserved across %s: got=0x%lx want=0x%lx",
 	    name, across, got, want);
 }
@@ -650,18 +674,28 @@ read_ctpidr_el0(void)
  * exact tag/bounds/perms/address equality.  across is a short phrase
  * describing the round-trip path under test (e.g., "cocall" /
  * "coaccept resumption") that gets spliced into the failure message.
+ * With fatal=true, errx on the first mismatch; with fatal=false,
+ * just return false instead.  Returns true if every slot matches.
  */
-static void
+static bool
 check_caps_match(void * const want[GP_MARKER_COUNT],
-    void * const got[GP_MARKER_COUNT], const char *across)
+    void * const got[GP_MARKER_COUNT], const char *across, bool fatal)
 {
 	int i;
 
 	for (i = 0; i < GP_MARKER_COUNT; i++) {
-		CHERIBSDTEST_VERIFY2(__builtin_cheri_equal_exact(got[i], want[i]),
+		if (__builtin_cheri_equal_exact(got[i], want[i]))
+			continue;
+
+		if (!fatal)
+			return (false);
+
+		cheribsdtest_failure_errx(
 		    "c%d not preserved across %s: got=%#p want=%#p",
 		    i + 19, across, got[i], want[i]);
 	}
+
+	return (true);
 }
 
 /*
@@ -802,7 +836,7 @@ CHERIBSDTEST(colocation_callee_saved_fp_via_cocall,
 
 		fp_register_check_via_cocall(target, markers, vals);
 
-		check_q_match(markers, vals, "cocall");
+		check_q_match(markers, vals, "cocall", true);
 
 		cheribsdtest_success();
 	}
@@ -844,7 +878,7 @@ CHERIBSDTEST(colocation_callee_saved_gp_via_cocall,
 
 		gp_register_check_via_cocall(target, markers, vals);
 
-		check_caps_match(markers, vals, "cocall");
+		check_caps_match(markers, vals, "cocall", true);
 
 		cheribsdtest_success();
 	}
@@ -887,8 +921,10 @@ CHERIBSDTEST(colocation_fp_status_control_via_cocall,
 		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
 		read_fp_status_control(&fpcr_got, &fpsr_got);
 
-		check_named_scalar_match("FPCR", fpcr_want, fpcr_got, "cocall");
-		check_named_scalar_match("FPSR", fpsr_want, fpsr_got, "cocall");
+		check_named_scalar_match("FPCR", fpcr_want, fpcr_got, "cocall",
+		    true);
+		check_named_scalar_match("FPSR", fpsr_want, fpsr_got, "cocall",
+		    true);
 
 		cheribsdtest_success();
 	}
@@ -924,7 +960,7 @@ CHERIBSDTEST(colocation_callee_saved_fp_via_coaccept,
 		    &response, sizeof(response));
 
 		check_q_match(response.markers, response.vals,
-		    "coaccept resumption");
+		    "coaccept resumption", true);
 
 		cheribsdtest_success();
 	}
@@ -952,7 +988,7 @@ CHERIBSDTEST(colocation_callee_saved_gp_via_coaccept,
 		    &response, sizeof(response));
 
 		check_caps_match(response.markers, response.vals,
-		    "coaccept resumption");
+		    "coaccept resumption", true);
 
 		cheribsdtest_success();
 	}
@@ -982,9 +1018,9 @@ CHERIBSDTEST(colocation_fp_status_control_via_coaccept,
 		    fpcs_vals, sizeof(fpcs_vals));
 
 		check_named_scalar_match("FPCR", fpcr_want, fpcs_vals[0],
-		    "coaccept resumption");
+		    "coaccept resumption", true);
 		check_named_scalar_match("FPSR", fpsr_want, fpcs_vals[1],
-		    "coaccept resumption");
+		    "coaccept resumption", true);
 
 		cheribsdtest_success();
 	}
@@ -1054,7 +1090,8 @@ CHERIBSDTEST(colocation_ctpidr_el0_via_cocall,
 		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
 		after = read_ctpidr_el0();
 
-		check_named_cap_match("CTPIDR_EL0", before, after, "cocall");
+		check_named_cap_match("CTPIDR_EL0", before, after, "cocall",
+		    true);
 
 		cheribsdtest_success();
 	}
@@ -1082,7 +1119,315 @@ CHERIBSDTEST(colocation_ctpidr_el0_via_coaccept,
 		    &response, sizeof(response));
 
 		check_named_cap_match("CTPIDR_EL0", response.before,
-		    response.after, "coaccept resumption");
+		    response.after, "coaccept resumption", true);
+
+		cheribsdtest_success();
+	}
+}
+
+/*
+ * Direct-switcher (libc-bypass) preservation tests.
+ *
+ * The via_cocall / via_coaccept tests above exercise the full
+ * userspace path: libsys' cocall / coaccept C wrapper -> the
+ * _cocall / _coaccept asm trampolines -> switcher.  The trampolines
+ * only save c29 and c30 around the blrs, but the cocall / coaccept
+ * C wrapper above them is an AAPCS function whose compiler-generated
+ * prologue/epilogue spills whichever subset of c19-c28 it happens
+ * to use as locals.  A switcher bug that clobbered those particular
+ * registers would be silently restored from the wrapper's spill
+ * slots on return, and the existing tests would still pass.  Which
+ * c19-c28 are masked this way depends on the compiler output, so
+ * the existing tests' sensitivity to c19-c28 clobbers is
+ * non-uniform.  q8-q15, FPCR, FPSR and CTPIDR_EL0 are not touched
+ * by the wrapper or the trampolines, so the existing tests already
+ * cover those.
+ *
+ * The tests below skip the C wrapper.  A pure-asm helper sets
+ * the markers, branches into the switcher entry directly via blrs
+ * (the same instruction libsys uses), and snapshots the registers
+ * on return -- with no AAPCS-compliant intermediate frame between
+ * marker load and snapshot.  The main coverage gain is uniform
+ * sensitivity to switcher c19-c28 clobbers regardless of compiler
+ * spill choices; q8-q15 / FPCR / FPSR / CTPIDR_EL0 are exercised
+ * here too to keep the direct path self-contained and future-proof
+ * against any save/restore being added to the libsys trampolines.
+ *
+ * One test per direction (cocall caller / coaccept callee).  Each
+ * covers every register the switcher tracks (c19-c28, q8-q15, FPCR,
+ * FPSR, CTPIDR_EL0) in one call.  The helper must save, stage and
+ * restore the full set regardless of which class is under test, so
+ * covering them all in one invocation is free.
+ */
+
+/*
+ * Combined register snapshot for the direct-switcher tests.  Layout
+ * is shared with the asm helper -- offsets are the SR_* constants in
+ * arm64/cheribsdtest_colocation_asm.h, and a layout change here must
+ * be mirrored there.
+ */
+struct switcher_regset {
+	void			*gp[GP_MARKER_COUNT]; /* c19-c28; offset 0 */
+	struct fp_q_slot	fp[8];		/* q8-q15;  offset 160 */
+	uint64_t		fpcr;		/* offset 288 */
+	uint64_t		fpsr;		/* offset 296 */
+	void			*ctpidr_el0;	/* offset 304 */
+} __aligned(16);
+
+_Static_assert(__offsetof(struct switcher_regset, gp) == SR_GP_OFF,
+    "switcher_regset.gp offset must match SR_GP_OFF");
+
+_Static_assert(__offsetof(struct switcher_regset, fp) == SR_FP_OFF,
+    "switcher_regset.fp offset must match SR_FP_OFF");
+
+_Static_assert(__offsetof(struct switcher_regset, fpcr) == SR_FPCR_OFF,
+    "switcher_regset.fpcr offset must match SR_FPCR_OFF");
+
+_Static_assert(__offsetof(struct switcher_regset, fpsr) == SR_FPSR_OFF,
+    "switcher_regset.fpsr offset must match SR_FPSR_OFF");
+
+_Static_assert(__offsetof(struct switcher_regset, ctpidr_el0) ==
+    SR_CTPIDR_OFF,
+    "switcher_regset.ctpidr_el0 offset must match SR_CTPIDR_OFF");
+
+ssize_t	switcher_entry_check_direct(void *code, void *data,
+	    void *target_or_cookiep,
+	    const struct switcher_regset *markers,
+	    struct switcher_regset *vals);
+
+static void
+build_switcher_regset_markers(struct switcher_regset *r, char *buf)
+{
+	build_gp_cap_markers(r->gp, buf);
+	build_fp_q_markers(r->fp);
+	r->fpcr = FPCR_PRESERVATION_MARKER;
+	r->fpsr = FPSR_PRESERVATION_MARKER;
+
+	/*
+	 * CTPIDR_EL0 marker is a tagged data cap into buf -- not a valid
+	 * TLS pointer.  The asm helper restores the real CTPIDR_EL0
+	 * before any C code resumes, so the marker only has to survive
+	 * the switcher round trip.  The mid-stride offset keeps it
+	 * distinct from every GP marker (whole strides into buf), so a
+	 * cross-restore between CTPIDR_EL0 and c19-c28 cannot pass
+	 * unnoticed; the marker is never dereferenced, so its alignment
+	 * does not matter.
+	 */
+	r->ctpidr_el0 = &buf[GP_MARKER_STRIDE / 2];
+}
+
+/* Return whether every class matches, with no diagnostics. */
+static bool
+switcher_regset_check_silent(const struct switcher_regset *want,
+    const struct switcher_regset *got)
+{
+	return (
+	    check_caps_match(want->gp, got->gp, "direct switcher", false) &&
+	    check_q_match(want->fp, got->fp, "direct switcher", false) &&
+	    check_named_scalar_match("FPCR", want->fpcr, got->fpcr,
+		    "direct switcher", false) &&
+	    check_named_scalar_match("FPSR", want->fpsr, got->fpsr,
+		    "direct switcher", false) &&
+	    check_named_cap_match("CTPIDR_EL0", want->ctpidr_el0,
+		    got->ctpidr_el0, "direct switcher", false));
+}
+
+/*
+ * On mismatch the per-class helper fails the test with a
+ * per-register diagnostic, so a return means every class matched.
+ */
+static void
+switcher_regset_check_fatal(const struct switcher_regset *want,
+    const struct switcher_regset *got)
+{
+	check_caps_match(want->gp, got->gp, "direct switcher", true);
+	check_q_match(want->fp, got->fp, "direct switcher", true);
+	check_named_scalar_match("FPCR", want->fpcr, got->fpcr,
+	    "direct switcher", true);
+	check_named_scalar_match("FPSR", want->fpsr, got->fpsr,
+	    "direct switcher", true);
+	check_named_cap_match("CTPIDR_EL0", want->ctpidr_el0, got->ctpidr_el0,
+	    "direct switcher", true);
+}
+
+CHERIBSDTEST(colocation_switcher_cocall_direct,
+    "Drive switcher_cocall directly (no libc shim) and check c19-c28, "
+    "q8-q15, FPCR, FPSR, CTPIDR_EL0 all survive the round trip",
+    .ct_child_func = colocation_register_worker)
+{
+	void *target;
+	void * __capability cocall_code;
+	void * __capability cocall_data;
+	struct switcher_regset markers, vals;
+	char buf[GP_MARKER_BUF_SIZE] __aligned(16);
+	ssize_t ret;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGTEST_SERVICE, pid);
+
+		/*
+		 * Mint the sealed cocall code+data pair into local vars via
+		 * the raw _cosetup syscall.  libsys's cosetup() wrapper would
+		 * stash the pair in TLS globals that aren't exported, so we
+		 * can't access them.
+		 */
+		if (_cosetup(COSETUP_COCALL, &cocall_code, &cocall_data) != 0)
+			cheribsdtest_failure_err("_cosetup");
+
+		build_switcher_regset_markers(&markers, buf);
+
+		/*
+		 * wait_for_service() only proves the worker has
+		 * coregistered; until its first coaccept parks, the
+		 * switcher bounces the cocall with EAGAIN -- and on that
+		 * exit the markers are still in the registers, so an
+		 * unchecked call would snapshot them unchanged and pass
+		 * without testing anything.  Retry the window away, as
+		 * libc's cocall() does, and fail on any other error.
+		 */
+		for (;;) {
+			ret = switcher_entry_check_direct(cocall_code,
+			    cocall_data, target, &markers, &vals);
+			if (ret >= 0)
+				break;
+
+			if (ret != -EAGAIN) {
+				errno = (int)-ret;
+				cheribsdtest_failure_err(
+				    "switcher_entry_check_direct");
+			}
+
+			usleep(1000);
+		}
+
+		switcher_regset_check_fatal(&markers, &vals);
+
+		cheribsdtest_success();
+	}
+}
+
+struct colocation_switcher_response {
+	struct switcher_regset	markers;
+	struct switcher_regset	vals;
+	bool			worker_pass;
+};
+
+/*
+ * Worker for the coaccept-direct test.  Mirrors the existing
+ * gp/fp/ctpidr workers but drives switcher_coaccept directly.  The
+ * first coaccept blocks via copark; the second (libc) coaccept ships
+ * the markers, post-resume snapshot, and the worker's own pass/fail
+ * verdict back to the test runner.  The verdict is authoritative --
+ * the markers/vals are shipped only so the runner can print the
+ * mismatching registers when the verdict is a failure.
+ */
+static void
+colocation_switcher_coaccept_direct_worker(void)
+{
+	intcap_t recv_buf = 0;
+	struct colocation_switcher_response response;
+	void * __capability coaccept_code;
+	void * __capability coaccept_data;
+	char buf[GP_MARKER_BUF_SIZE] __aligned(16);
+	ssize_t ret;
+
+	/*
+	 * Populate libsys's TLS with the coaccept pair: the
+	 * response-shipping coaccept() at the bottom takes the libsys
+	 * path and reads the pair from there.
+	 */
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	/*
+	 * Also mint the sealed pair into local vars via the raw
+	 * _cosetup syscall.  The kernel creates the SCB once per thread
+	 * and reuses it, so this second call just mints another sealed
+	 * pair to the same SCB -- both coaccepts here operate on one
+	 * control block.
+	 */
+	if (_cosetup(COSETUP_COACCEPT, &coaccept_code, &coaccept_data) != 0)
+		err(EX_OSERR, "_cosetup");
+
+	if (coregister(COLOCATION_REGTEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	build_switcher_regset_markers(&response.markers, buf);
+
+	/*
+	 * Drives switcher_coaccept directly; sleeps via copark until a
+	 * cocall arrives, snapshots the registers on resumption, and
+	 * returns to C.
+	 */
+	ret = switcher_entry_check_direct(coaccept_code, coaccept_data,
+	    NULL, &response.markers, &response.vals);
+	if (ret < 0)
+		errc(EX_OSERR, (int)-ret, "switcher_entry_check_direct");
+
+	/*
+	 * Compare here, before replying, and ship only the verdict:
+	 * the values would travel in a cocall reply, and a cocall bug
+	 * that cleared capability tags would clear them in markers and
+	 * snapshot equally -- the two would still match each other,
+	 * and the bug would go unnoticed.
+	 */
+	response.worker_pass = switcher_regset_check_silent(&response.markers,
+	    &response.vals);
+
+	/* Send markers, snapshot and verdict back to the test runner. */
+	if (coaccept(NULL, &response, sizeof(response), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	err(EX_SOFTWARE, "Second coaccept returned.");
+}
+
+CHERIBSDTEST(colocation_switcher_coaccept_direct,
+    "Drive switcher_coaccept directly (no libc shim) and check c19-c28, "
+    "q8-q15, FPCR, FPSR, CTPIDR_EL0 all survive the round trip",
+    .ct_child_func = colocation_switcher_coaccept_direct_worker)
+{
+	void *target;
+	intcap_t send_buf = 0;
+	struct colocation_switcher_response response;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGTEST_SERVICE, pid);
+
+		cocall_or_fail(target, &send_buf, sizeof(send_buf),
+		    &response, sizeof(response));
+
+		/*
+		 * The worker's verdict is authoritative.  If it reports
+		 * failure, rerun the comparison on the received copies to
+		 * name the mismatching registers in the test failure; if
+		 * those copies compare equal, the cocall reply must have
+		 * altered them in a way that hides the mismatch, so report
+		 * that instead.
+		 */
+		if (!response.worker_pass) {
+			switcher_regset_check_fatal(&response.markers,
+			    &response.vals);
+			cheribsdtest_failure_errx(
+			    "worker reported switcher "
+			    "register-preservation failure but the "
+			    "received markers/snapshot compare equal -- "
+			    "the cocall reply may be masking the mismatch");
+		}
 
 		cheribsdtest_success();
 	}
@@ -1172,7 +1517,8 @@ CHERIBSDTEST(colocation_rctpidr_el0_via_cocall,
 		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
 		after = read_rctpidr_el0();
 
-		check_named_cap_match("RCTPIDR_EL0", before, after, "cocall");
+		check_named_cap_match("RCTPIDR_EL0", before, after, "cocall",
+		    true);
 
 		cheribsdtest_success();
 	}
@@ -1206,7 +1552,7 @@ CHERIBSDTEST(colocation_rctpidr_el0_via_coaccept,
 		    &response, sizeof(response));
 
 		check_named_cap_match("RCTPIDR_EL0", response.before,
-		    response.after, "coaccept resumption");
+		    response.after, "coaccept resumption", true);
 
 		cheribsdtest_success();
 	}
