@@ -1079,6 +1079,144 @@ CHERIBSDTEST(colocation_served_newcomer_unborrow,
 
 #endif /* !CHERIBSD_C18N_TESTS */
 
+/* Excluded under c18n: a separate cocall fast-path issue causes SIGILL. */
+#ifndef CHERIBSD_C18N_TESTS
+
+#define	COLOCATION_NESTED_LEAF_SERVICE		"colocation_nested_leaf"
+#define	COLOCATION_NESTED_MIDDLE_SERVICE	"colocation_nested_middle"
+
+static void
+nested_leaf_worker(void)
+{
+	intcap_t buf;
+	pid_t real_pid, observed;
+
+	real_pid = getpid();
+
+	buf = CO_FAIL;
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		/* Unborrow D onto its home thread TD and check its own pid. */
+		observed = getpid();
+		buf = (observed == real_pid) ? CO_PASS : CO_FAIL;
+	}
+}
+
+static void
+nested_middle_worker(void)
+{
+	intcap_t buf, leaf_buf;
+	void *leaf;
+	pid_t real_pid, observed;
+
+	/*
+	 * B is both callee (of A) and caller (of D); child_wait_for_service()
+	 * does the cosetup(COSETUP_COCALL) for the caller side on the same scb
+	 * the dispatch already set up for coaccept.
+	 */
+	leaf = child_wait_for_service(COLOCATION_NESTED_LEAF_SERVICE);
+
+	real_pid = getpid();
+
+	buf = CO_FAIL;
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		/*
+		 * The coaccept above received A's cocall.  Make the nested
+		 * cocall to D (which returns before we reply to A), then
+		 * unborrow B onto its home thread TB and check its own pid.
+		 * Pass iff B's pid is right and D reported its own pid too.
+		 */
+		leaf_buf = 0;
+		if (cocall(leaf, &leaf_buf, sizeof(leaf_buf), &leaf_buf,
+		    sizeof(leaf_buf)) < 0)
+			err(EX_OSERR, "cocall");
+
+		observed = getpid();
+		buf = (observed == real_pid && (int)leaf_buf == CO_PASS) ?
+		    CO_PASS : CO_FAIL;
+	}
+}
+
+static void
+colocation_nested_dispatch(void)
+{
+	void *target;
+	intcap_t buf;
+	pid_t my_pid, observed;
+	int error;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup_coaccept");
+
+	/* Leaf callee D wins this; middle B and outer A fall through. */
+	error = coregister(COLOCATION_NESTED_LEAF_SERVICE, NULL);
+	if (error == 0) {
+		nested_leaf_worker();		/* callee D */
+		errx(EX_SOFTWARE, "nested_leaf_worker() returned");
+	}
+	if (errno != EEXIST)
+		err(EX_OSERR, "coregister leaf");
+
+	/* Middle B wins this; outer A falls through. */
+	error = coregister(COLOCATION_NESTED_MIDDLE_SERVICE, NULL);
+	if (error == 0) {
+		nested_middle_worker();		/* callee B, caller of D */
+		errx(EX_SOFTWARE, "nested_middle_worker() returned");
+	}
+	if (errno != EEXIST)
+		err(EX_OSERR, "coregister middle");
+
+	/* Both services taken: we are the outermost caller A. */
+	target = child_wait_for_service(COLOCATION_NESTED_MIDDLE_SERVICE);
+
+	my_pid = getpid();
+
+	buf = 0;
+	if (cocall(target, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "cocall");
+
+	/* Back from the round trip; unborrow A and check its own pid. */
+	observed = getpid();
+	exit((observed == my_pid && (int)buf == CO_PASS) ? 0 : EX_SOFTWARE);
+}
+
+/*
+ * A strictly nested cocall chain with no overlap.
+ * Three colocated processes share one vmspace, with kernel threads TA, TB,
+ * TD.  D is the leaf callee; B is the middle (callee of A and caller of D);
+ * A is the outermost caller.  Each nested cocall returns before its caller
+ * replies outward (B<D before A<B), so the borrow records are used and
+ * released in strict LIFO order -- no second caller ever overlaps a live
+ * borrow.
+ *
+ *	A>B
+ *	B>D
+ *	D@
+ *	B<D
+ *	B@
+ *	A<B
+ *	A@
+ *
+ * Property under test: pure nesting must preserve attribution -- D's and B's
+ * own syscalls while serving, and A's after the round trip, must each see
+ * their own pid.  This tests whether the scalar borrow record handles a
+ * nested return, with no overlap in play.
+ */
+CHERIBSDTEST(colocation_nested_chain_unborrow,
+    "A strictly nested cocall chain (A calls B, B calls D) must preserve "
+    "each process's identity across the nested borrows and returns",
+    .ct_child_func = colocation_nested_dispatch)
+{
+	colocation_coexec_run(3, "nested chain saw the wrong pid");
+}
+
+#endif /* !CHERIBSD_C18N_TESTS */
+
 #if defined(__aarch64__)
 /*
  * Tests for callee-saved register preservation across the cocall
