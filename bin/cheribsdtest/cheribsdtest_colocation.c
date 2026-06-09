@@ -1008,6 +1008,134 @@ CHERIBSDTEST(colocation_pending_incumbent_unborrow,
 	colocation_coexec_run(3, "incumbent saw the wrong pid");
 }
 
+#define	COLOCATION_NESTED_LEAF_SERVICE		"colocation_nested_leaf"
+#define	COLOCATION_NESTED_MIDDLE_SERVICE	"colocation_nested_middle"
+
+static void __dead2
+nested_leaf_worker(void)
+{
+	intcap_t buf;
+	pid_t my_pid, observed_pid;
+
+	my_pid = getpid();
+
+	buf = CO_FAIL;
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		observed_pid = getpid();
+		buf = (observed_pid == my_pid) ? CO_PASS : CO_FAIL;
+	}
+}
+
+static void __dead2
+nested_middle_worker(void)
+{
+	intcap_t buf, leaf_buf;
+	void *cocall_code;
+	void *cocall_data;
+	void *leaf;
+	pid_t my_pid, observed_pid;
+
+	leaf = child_wait_for_service(COLOCATION_NESTED_LEAF_SERVICE);
+
+	/*
+	 * cosetup() keeps the sealed pair in variables private to libsys, so
+	 * get a copy with the raw syscall.
+	 */
+	if (_cosetup(COSETUP_COCALL, &cocall_code, &cocall_data) != 0)
+		err(EX_OSERR, "_cosetup");
+
+	my_pid = getpid();
+
+	buf = CO_FAIL;
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		leaf_buf = 0;
+
+		/*
+		 * The switcher returns EAGAIN until D waits in its first
+		 * coaccept.  cocall() retries after __usleep(), whose syscall
+		 * would move B's code back to TB and turn the chain into two
+		 * separate round trips, so retry here without a syscall.
+		 */
+		while (_cocall(cocall_code, cocall_data, leaf, &leaf_buf,
+		    sizeof(leaf_buf), &leaf_buf, sizeof(leaf_buf)) < 0) {
+			if (errno != EAGAIN)
+				err(EX_OSERR, "_cocall");
+		}
+
+		observed_pid = getpid();
+		buf = (observed_pid == my_pid && (int)leaf_buf == CO_PASS) ?
+		    CO_PASS : CO_FAIL;
+	}
+}
+
+static void
+colocation_nested_chain_dispatch(void)
+{
+	void *target;
+	intcap_t buf;
+	pid_t my_pid, observed_pid;
+	int error;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup_coaccept");
+
+	/* Leaf callee D wins this; middle B and outer A fall through. */
+	error = coregister(COLOCATION_NESTED_LEAF_SERVICE, NULL);
+	if (error == 0)
+		nested_leaf_worker();		/* callee D */
+	if (errno != EEXIST)
+		err(EX_OSERR, "coregister leaf");
+
+	error = coregister(COLOCATION_NESTED_MIDDLE_SERVICE, NULL);
+	if (error == 0)
+		nested_middle_worker();		/* callee B, caller of D */
+	if (errno != EEXIST)
+		err(EX_OSERR, "coregister middle");
+
+	/* Both services taken: we are the outermost caller A. */
+	target = child_wait_for_service(COLOCATION_NESTED_MIDDLE_SERVICE);
+
+	my_pid = getpid();
+
+	buf = 0;
+	if (cocall(target, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "cocall");
+
+	observed_pid = getpid();
+	exit((observed_pid == my_pid && (int)buf == CO_PASS) ? 0 : EX_SOFTWARE);
+}
+
+/*
+ * Three colocated processes with kernel threads TA, TB, and TD: D is the
+ * leaf callee, B the middle (callee of A, caller of D), and A the outermost
+ * caller.  B's cocall to D returns before B replies to A (B<D before A<B),
+ * so each callee serves one caller at a time.
+ *
+ *	A>B	=> {TA->B, (A)}
+ *	B>D	=> {TA->D, (A), (B)}
+ *	D@	|= {TD->D}
+ *	B<D	=> {TD->B, (A)}
+ *	B@	|= {TB->B}
+ *	A<B	=> {TB->A}
+ *	A@	|= {TA->A}
+ *
+ * Property under test: D@, B@, and A@ each move their code back to its own
+ * thread, so that the syscall runs as that process.
+ */
+CHERIBSDTEST(colocation_nested_chain_unborrow,
+    "Check that a strictly nested cocall chain (A calls B, B calls D) "
+    "preserves each process's identity across the nested borrows and returns",
+    .ct_child_func = colocation_nested_chain_dispatch)
+{
+	colocation_coexec_run(3, "nested chain saw the wrong pid");
+}
+
 #endif /* !CHERIBSD_C18N_TESTS */
 
 #if defined(__aarch64__)
