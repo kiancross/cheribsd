@@ -1217,6 +1217,107 @@ CHERIBSDTEST(colocation_nested_chain_unborrow,
 
 #endif /* !CHERIBSD_C18N_TESTS */
 
+/* Excluded under c18n: a separate cocall fast-path issue causes SIGILL. */
+#ifndef CHERIBSD_C18N_TESTS
+
+#define	COLOCATION_SIGNAL_HOSTED_SERVICE	"colocation_signal_hosted"
+
+static void __dead2
+signal_hosted_worker(void)
+{
+	intcap_t buf = 0;
+
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		/*
+		 * Unborrow B onto its home thread TB so the next coaccept hands
+		 * the caller's context onto TB, leaving the caller hosted there.
+		 */
+		(void)getpid();
+	}
+}
+
+static volatile sig_atomic_t signal_hosted_reached;
+
+static void
+signal_hosted_handler(int sig __unused)
+{
+	/*
+	 * If the timer beat the cocall, A is not hosted yet and the path under
+	 * test was not taken; re-arm and retry rather than passing vacuously.
+	 */
+	if (!signal_hosted_reached) {
+		(void)alarm(1);
+		return;
+	}
+
+	/* Reached only if delivery succeeded; the clean _exit() is the verdict. */
+	_exit(0);
+}
+
+static void
+colocation_signal_hosted_dispatch(void)
+{
+	void *target;
+	intcap_t buf;
+
+	if (coregister_wins(COLOCATION_SIGNAL_HOSTED_SERVICE))
+		signal_hosted_worker();	/* callee B */
+
+	target = child_wait_for_service(COLOCATION_SIGNAL_HOSTED_SERVICE);
+
+	if (signal(SIGALRM, signal_hosted_handler) == SIG_ERR)
+		err(EX_OSERR, "signal");
+
+	/*
+	 * Arm the timer before the cocall, then spin without syscalling: a
+	 * syscall would unborrow us off TB, so the signal must arrive while
+	 * we are still hosted there.
+	 */
+	alarm(1);
+
+	buf = 0;
+	if (cocall(target, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "cocall");
+
+	/* A plain store, deliberately not a syscall: we are now hosted on TB. */
+	signal_hosted_reached = 1;
+
+	for (;;)
+		;
+}
+
+/*
+ * Two colocated processes share one vmspace: B is the callee (the coregister
+ * winner) and A is the lone caller, with kernel threads TA and TB.
+ *
+ *	A>B
+ *	B@
+ *	A<B	=> {TB->A}
+ *	<timer fires: signal delivered to A while it is hosted on TB>
+ *
+ * A arms a one-shot timer, cocalls B, and is left hosted on B's thread TB,
+ * then spins without ever syscalling.  When the timer fires, the signal is
+ * delivered to A while it runs on the borrowed thread.  Two properties under
+ * test -- liveness: the signal must reach A even though A never syscalls to
+ * unborrow, rather than being deferred indefinitely; and safety: delivering
+ * and handling it must not corrupt kernel state.
+ */
+CHERIBSDTEST(colocation_signal_while_hosted,
+    "A signal must be delivered to the handler of a process while it is hosted "
+    "on another's borrowed thread, without faulting the kernel",
+    .ct_child_func = colocation_signal_hosted_dispatch,
+    .ct_xfail_reason =
+	"Signal delivery to a process running on a borrowed thread corrupts "
+	"kernel state (a separate signal-delivery bug)")
+{
+	colocation_coexec_run(2, "signal not delivered safely to hosted process");
+}
+
+#endif /* !CHERIBSD_C18N_TESTS */
+
 #if defined(__aarch64__)
 /*
  * Tests for callee-saved register preservation across the cocall
