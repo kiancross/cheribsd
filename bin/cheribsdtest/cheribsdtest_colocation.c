@@ -51,11 +51,13 @@
 #include <kvm.h>
 #include <libprocstat.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sysexits.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #ifdef CHERIBSD_DYNAMIC_TESTS
@@ -1134,6 +1136,166 @@ CHERIBSDTEST(colocation_nested_chain_unborrow,
     .ct_child_func = colocation_nested_chain_dispatch)
 {
 	colocation_coexec_run(3, "nested chain saw the wrong pid");
+}
+
+#define	COLOCATION_SIGNAL_HOSTED_SERVICE	"colocation_signal_hosted"
+
+static void __dead2
+signal_hosted_worker(void)
+{
+	intcap_t buf = 0;
+
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		/*
+		 * Any syscall would do.  It moves B's code back to its own
+		 * thread TB, where B then replies.
+		 */
+		(void)getpid();
+	}
+}
+
+/* How far A has got in one attempt when the signal arrives. */
+enum signal_hosted_state {
+	SIGNAL_HOSTED_CALLING,		/* before the spin loop */
+	SIGNAL_HOSTED_SPINNING,		/* in the spin loop, hosted on TB */
+	SIGNAL_HOSTED_TOO_EARLY,	/* signal came before the spin loop */
+};
+
+/*
+ * A signal handler cannot be given an argument of our own, so A passes
+ * the handler what it needs here.
+ */
+static struct {
+	_Atomic int		state;		/* enum signal_hosted_state */
+	pid_t			pid;
+	volatile ptraddr_t	spin_pc;
+} signal_hosted;
+
+static ptraddr_t
+interrupted_pc(const ucontext_t *uc)
+{
+#if defined(__aarch64__)
+	return ((ptraddr_t)uc->uc_mcontext.mc_capregs.cap_elr);
+#elif defined(__riscv)
+	return ((ptraddr_t)uc->uc_mcontext.mc_capregs.cp_sepcc);
+#else
+#error "what architecture is this?"
+#endif
+}
+
+/*
+ * A spins here, with no syscall, so that its code stays on TB until the
+ * signal arrives.  Returns only if the signal came before the spin loop.
+ */
+static void
+signal_hosted_spin(void)
+{
+	int expected;
+
+	/*
+	 * The handler compares this label's address with the PC where the
+	 * signal interrupted A.  On Morello, the address of C64 code, such as
+	 * this label, has bit 0 set, which tells a jump to switch to C64.  The
+	 * jump clears the bit, so the PC never has it, and hence it is cleared
+	 * here too.
+	 */
+	signal_hosted.spin_pc = (ptraddr_t)&&spin & ~(ptraddr_t)1;
+
+	expected = SIGNAL_HOSTED_CALLING;
+	if (!atomic_compare_exchange_strong(&signal_hosted.state, &expected,
+	    SIGNAL_HOSTED_SPINNING))
+		return;
+
+spin:
+	goto spin;
+}
+
+static void
+signal_hosted_handler(int sig __unused, siginfo_t *info __unused, void *arg)
+{
+	int expected;
+
+	/*
+	 * If the signal comes before A's code is hosted, this attempt tests
+	 * nothing.  Record that, so that A makes the cocall again.
+	 */
+	expected = SIGNAL_HOSTED_CALLING;
+	if (atomic_compare_exchange_strong(&signal_hosted.state, &expected,
+	    SIGNAL_HOSTED_TOO_EARLY))
+		return;
+
+	if (interrupted_pc(arg) != signal_hosted.spin_pc)
+		_exit(EX_SOFTWARE);
+
+	_exit(getpid() == signal_hosted.pid ? 0 : EX_SOFTWARE);
+}
+
+static void
+colocation_signal_while_hosted_dispatch(void)
+{
+	struct sigaction sa;
+	intcap_t buf;
+	void *target;
+
+	if (coregister_wins(COLOCATION_SIGNAL_HOSTED_SERVICE))
+		signal_hosted_worker();	/* callee B */
+
+	target = child_wait_for_service(COLOCATION_SIGNAL_HOSTED_SERVICE);
+	signal_hosted.pid = getpid();
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_sigaction = signal_hosted_handler;
+	sa.sa_flags = SA_SIGINFO;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGALRM, &sa, NULL) != 0)
+		err(EX_OSERR, "sigaction");
+
+	/*
+	 * The timer is armed before the cocall, because a syscall after it
+	 * would move A's code back to TA.
+	 */
+	for (;;) {
+		atomic_store(&signal_hosted.state, SIGNAL_HOSTED_CALLING);
+		alarm(1);
+
+		buf = 0;
+		if (cocall(target, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			err(EX_OSERR, "cocall");
+
+		signal_hosted_spin();
+	}
+}
+
+/*
+ * Two colocated processes share one vmspace: B is the callee (the coregister
+ * winner) and A is the caller, with kernel threads TA and TB.
+ *
+ *	A>B
+ *	B@
+ *	A<B	=> {TB->A}
+ *	SIGALRM to A
+ *
+ * Property under test: the signal interrupts A's code where it runs, on TB,
+ * and A's handler runs as A.
+ */
+CHERIBSDTEST(colocation_signal_while_hosted,
+    "Check that a signal to a hosted process interrupts its code on the "
+    "thread hosting it, and that the handler runs as the hosted process",
+    .ct_child_func = colocation_signal_while_hosted_dispatch,
+    .ct_check_skip = skip_known_panic,
+    .ct_xfail_reason =
+	"The kernel runs the handler on the process's own parked thread, not "
+	"where its code runs")
+{
+	/*
+	 * XXX: when A exits, the kernel unmaps its memory, and B's thread,
+	 * which may still run A's code, then faults; the teardown can hang or
+	 * panic the kernel.
+	 */
+	colocation_coexec_run(2, "signal not delivered to hosted code");
 }
 
 #endif /* !CHERIBSD_C18N_TESTS */
