@@ -1138,6 +1138,175 @@ CHERIBSDTEST(colocation_nested_chain_unborrow,
 	colocation_coexec_run(3, "nested chain saw the wrong pid");
 }
 
+#define	COLOCATION_NESTED_INCUMBENT_MIDDLE_SERVICE \
+	"colocation_nested_incumbent_middle"
+#define	COLOCATION_NESTED_INCUMBENT_LEAF_SERVICE \
+	"colocation_nested_incumbent_leaf"
+
+static void __dead2
+nested_incumbent_middle_worker(void)
+{
+	/*
+	 * A waits on this barrier with plain loads, because a syscall would
+	 * move A's code back to TA too early.  It starts at 1, and B releases
+	 * A by storing D's verdict, CO_PASS or CO_FAIL, neither of which is
+	 * 1.  One store both releases A and carries the verdict, so A cannot
+	 * see the release before the verdict.
+	 */
+	static volatile int barrier = 1;
+
+	struct caller_message msg;
+	intcap_t leaf_buf;
+	void *cocall_code;
+	void *cocall_data;
+	void *leaf;
+	int cocall_count;
+
+	leaf = child_wait_for_service(COLOCATION_NESTED_INCUMBENT_LEAF_SERVICE);
+
+	/*
+	 * cosetup() keeps the sealed pair in variables private to libsys, so
+	 * get a copy with the raw syscall.
+	 */
+	if (_cosetup(COSETUP_COCALL, &cocall_code, &cocall_data) != 0)
+		err(EX_OSERR, "_cosetup");
+
+	cocall_count = 0;
+	for (;;) {
+		/*
+		 * 1, not 0: coaccept() replies to the previous call, so the
+		 * first caller gets its reply from the second coaccept().
+		 */
+		msg.role = (cocall_count == 1) ? CO_INCUMBENT : CO_NEWCOMER;
+		msg.barrier = (cocall_count == 1) ? &barrier : NULL;
+
+		if (coaccept(NULL, &msg, sizeof(msg), &msg, sizeof(msg)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		if (cocall_count == 1) {
+			/*
+			 * B is serving C, on C's thread TC, while TB still
+			 * hosts A.  Call D in that state.
+			 */
+			leaf_buf = 0;
+
+			/*
+			 * The switcher returns EAGAIN until D waits in its
+			 * first coaccept.  cocall() retries after __usleep(),
+			 * whose syscall would move B's code back to TB before
+			 * the nested call, so retry here without a syscall.
+			 */
+			while (_cocall(cocall_code, cocall_data, leaf,
+			    &leaf_buf, sizeof(leaf_buf), &leaf_buf,
+			    sizeof(leaf_buf)) < 0) {
+				if (errno != EAGAIN)
+					err(EX_OSERR, "_cocall");
+			}
+
+			barrier = (int)leaf_buf;
+		}
+
+		/*
+		 * Any syscall would do.  It moves B's code back to its own
+		 * thread TB, where B then replies.
+		 */
+		(void)getpid();
+
+		cocall_count++;
+	}
+}
+
+static void __dead2
+wait_then_check_pid_and_verdict(volatile int *barrier, pid_t my_pid)
+{
+	int verdict;
+
+	/*
+	 * The wait makes no syscall, because a syscall would move the
+	 * caller's code back to its own thread before the check.
+	 */
+	while ((verdict = *barrier) == 1)
+		;
+
+	exit((getpid() == my_pid && verdict == CO_PASS) ? 0 : EX_SOFTWARE);
+}
+
+static void
+colocation_nested_incumbent_dispatch(void)
+{
+	struct caller_message msg;
+	void *target;
+	pid_t my_pid;
+	int error;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup_coaccept");
+
+	/* Leaf D wins first; middle B next; the two callers fall through. */
+	error = coregister(COLOCATION_NESTED_INCUMBENT_LEAF_SERVICE, NULL);
+	if (error == 0)
+		nested_leaf_worker();		/* callee D */
+	if (errno != EEXIST)
+		err(EX_OSERR, "coregister leaf");
+
+	error = coregister(COLOCATION_NESTED_INCUMBENT_MIDDLE_SERVICE, NULL);
+	if (error == 0)
+		nested_incumbent_middle_worker();	/* callee B */
+	if (errno != EEXIST)
+		err(EX_OSERR, "coregister middle");
+
+	/* Both services taken: we are a caller (incumbent A or newcomer C). */
+	target = child_wait_for_service(
+	    COLOCATION_NESTED_INCUMBENT_MIDDLE_SERVICE);
+
+	my_pid = getpid();
+
+	msg.barrier = NULL;
+	msg.role = 0;
+	if (cocall(target, &msg, sizeof(msg), &msg, sizeof(msg)) < 0)
+		err(EX_OSERR, "cocall");
+
+	if (msg.role == CO_INCUMBENT)
+		wait_then_check_pid_and_verdict(msg.barrier, my_pid);	/* A */
+	else
+		release_then_hold_thread(NULL);				/* C */
+}
+
+/*
+ * Four colocated processes share one vmspace: B is the middle callee, D the
+ * leaf callee, and A and C are callers (kernel threads TA, TB, TC, TD).  A is
+ * the incumbent: served first and left hosted on B's thread TB.  C is the
+ * newcomer.  While B serves C, running on TC, it makes a nested cocall to D,
+ * so two borrows are live at once: TB hosts A, and TC hosts D.  Steps
+ * joined by commas are not ordered by the test; the property holds in any
+ * order.
+ *
+ *	A>B
+ *	B@
+ *	A<B	=> {TB->A}
+ *	C>B	=> {TB->A, TC->B, (C)}
+ *	B>D	=> {TB->A, TC->D, (C), (B)}
+ *	D@	|= {TD->D}
+ *	B<D	=> {TB->A, TD->B, (C)}	; carries D's verdict, releases A
+ *	B@, C<B, A@	|= {TA->A}
+ *
+ * Property under test: D@ and A@ each move their code back to its own
+ * thread, so that the syscall runs as that process.
+ */
+CHERIBSDTEST(colocation_nested_incumbent_unborrow,
+    "Check that, when the callee makes a nested cocall while it serves a "
+    "second caller, with a first caller hosted on its thread, the nested "
+    "callee's syscall and the first caller's next syscall each run as their "
+    "own process (multi-client cocall)",
+    .ct_child_func = colocation_nested_incumbent_dispatch,
+    .ct_check_skip = skip_known_panic,
+    .ct_xfail_reason =
+	"Multi-client cocall is not yet supported: a second caller's cocall "
+	"clears the first caller's borrow record")
+{
+	colocation_coexec_run(4, "incumbent saw the wrong pid");
+}
+
 #define	COLOCATION_SIGNAL_HOSTED_SERVICE	"colocation_signal_hosted"
 
 static void __dead2
