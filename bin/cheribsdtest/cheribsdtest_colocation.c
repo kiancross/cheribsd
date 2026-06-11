@@ -1565,6 +1565,9 @@ void	gp_register_check_via_cocall(void *target,
 void	fp_register_check_via_coaccept(void *cookiep,
 	    const void *markers, void *vals);
 
+void	fp_register_check_across_unborrow(void *cookiep,
+	    const void *markers, void *vals);
+
 void	gp_register_check_via_coaccept(void *cookiep,
 	    void * const *markers, void **vals);
 
@@ -1790,6 +1793,34 @@ colocation_callee_saved_fp_worker(void)
 }
 
 static void
+colocation_fp_across_unborrow_worker(void)
+{
+	intcap_t recv_buf = 0;
+	struct colocation_fp_q_response response;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGTEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	build_fp_q_markers(response.markers);
+
+	/*
+	 * Unlike the via_coaccept worker, the helper syscalls between the
+	 * coaccept resumption and the snapshot, so response.vals is q8-q15
+	 * as observed after the unborrow has migrated this worker home.
+	 */
+	fp_register_check_across_unborrow(NULL, response.markers, response.vals);
+
+	if (coaccept(NULL, &response, sizeof(response), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	err(EX_SOFTWARE, "Second coaccept returned.");
+}
+
+static void
 colocation_callee_saved_gp_worker(void)
 {
 	intcap_t recv_buf = 0;
@@ -1991,6 +2022,49 @@ CHERIBSDTEST(colocation_callee_saved_fp_via_coaccept,
 
 		check_q_match(response.markers, response.vals,
 		    "coaccept resumption", true);
+
+		cheribsdtest_success();
+	}
+}
+
+/*
+ * The fast-path FP tests above verify the switcher preserves q8-q15
+ * across a cocall/coaccept domain transition.  This one checks the slow
+ * path instead: the worker is left borrowed on the caller's thread, then
+ * syscalls, forcing colocation_unborrow() to migrate it home.  The
+ * unborrow swaps only the trapframe, which holds no FP/SIMD state, so
+ * callee-saved q8-q15 may not travel with it -- a single-client hazard
+ * independent of the multi-client borrow-record bugs.
+ */
+CHERIBSDTEST(colocation_callee_saved_fp_across_unborrow,
+    "Check AArch64 callee-saved FP regs (q8-q15) survive the unborrow syscall",
+    .ct_child_func = colocation_fp_across_unborrow_worker)
+{
+	void *target;
+	struct colocation_fp_q_response response;
+	intcap_t send_buf = 0;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGTEST_SERVICE, pid);
+
+		/*
+		 * The worker loaded q8-q15 markers before its first coaccept;
+		 * on resumption it syscalls (forcing the unborrow), snapshots
+		 * q8-q15, and ships markers and observed values back via the
+		 * second coaccept's response buffer.
+		 */
+		cocall_or_fail(target, &send_buf, sizeof(send_buf),
+		    &response, sizeof(response));
+
+		check_q_match(response.markers, response.vals,
+		    "unborrow", true);
 
 		cheribsdtest_success();
 	}
