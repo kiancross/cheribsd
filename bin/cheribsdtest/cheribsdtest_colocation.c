@@ -1220,6 +1220,192 @@ CHERIBSDTEST(colocation_nested_chain_unborrow,
 /* Excluded under c18n: a separate cocall fast-path issue causes SIGILL. */
 #ifndef CHERIBSD_C18N_TESTS
 
+#define	COLOCATION_DOUBLE_LEND_MIDDLE_SERVICE	"colocation_double_lend_middle"
+#define	COLOCATION_DOUBLE_LEND_LEAF_SERVICE	"colocation_double_lend_leaf"
+
+static void __dead2
+double_lend_leaf_worker(void)
+{
+	intcap_t buf;
+	pid_t real_pid, observed;
+
+	real_pid = getpid();
+
+	buf = CO_FAIL;
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		/* Unborrow D onto its home thread TD and check its own pid. */
+		observed = getpid();
+		buf = (observed == real_pid) ? CO_PASS : CO_FAIL;
+	}
+}
+
+static void __dead2
+double_lend_middle_worker(void)
+{
+	/*
+	 * Barrier the incumbent waits on, touched with plain loads/stores
+	 * only: a syscall would unborrow and close the window the test must
+	 * hold open.  It starts raised (1); B lowers it by storing D's verdict
+	 * (CO_PASS/CO_FAIL, both != 1) once the nested cocall to D returns.
+	 */
+	static volatile int barrier = 1;
+
+	struct caller_msg msg;
+	intcap_t leaf_buf;
+	void *leaf;
+	int served;
+
+	/* Caller side for the nested call to D, on B's existing scb. */
+	leaf = child_wait_for_service(COLOCATION_DOUBLE_LEND_LEAF_SERVICE);
+
+	served = 0;
+	for (;;) {
+		/* The served==1 reply lands on the first caller: the incumbent. */
+		msg.role = (served == 1) ? CO_INCUMBENT : CO_NEWCOMER;
+		msg.barrier = (served == 1) ? &barrier : NULL;
+
+		if (coaccept(NULL, &msg, sizeof(msg), &msg, sizeof(msg)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		if (served == 1) {
+			/*
+			 * This coaccept replied INCUMBENT to the first caller A,
+			 * leaving A hosted on TB, and returned with the newcomer
+			 * C, so B now runs borrowed on TC with A still on TB --
+			 * two live borrows.  Make the nested cocall to D while
+			 * both are live; D's verdict comes back in leaf_buf.
+			 */
+			leaf_buf = 0;
+			if (cocall(leaf, &leaf_buf, sizeof(leaf_buf), &leaf_buf,
+			    sizeof(leaf_buf)) < 0)
+				err(EX_OSERR, "cocall leaf");
+
+			/*
+			 * Single release-with-verdict store: CO_PASS and CO_FAIL
+			 * are both != 1, so one store both releases A and carries
+			 * D's result.  Two separate plain stores have no ordering
+			 * on ARM's weak memory model, so A could observe the
+			 * release before a separate leaf flag had settled.
+			 */
+			barrier = (int)leaf_buf;
+		}
+
+		/* Unborrow B back onto its home thread TB after each serve. */
+		(void)getpid();
+
+		served++;
+	}
+}
+
+/*
+ * Incumbent verdict.  B releases us by storing D's CO_PASS/CO_FAIL into the
+ * barrier (both != 1, its initial value), so the value that ends the spin is
+ * D's result.  The spin is plain loads -- no syscall -- so it holds the
+ * {TB->A} state open until B is done.  We then exit zero iff our own unborrow
+ * landed (getpid() saw our pid) and D was attributed correctly.
+ */
+static void __dead2
+double_lend_incumbent_verdict(volatile int *barrier, pid_t my_pid)
+{
+	int verdict;
+
+	while ((verdict = *barrier) == 1)
+		;
+
+	exit((getpid() == my_pid && verdict == CO_PASS) ? 0 : EX_SOFTWARE);
+}
+
+static void
+colocation_double_lend_dispatch(void)
+{
+	struct caller_msg msg;
+	void *target;
+	pid_t my_pid;
+	int error;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup_coaccept");
+
+	/* Leaf D wins first; middle B next; the two callers fall through. */
+	error = coregister(COLOCATION_DOUBLE_LEND_LEAF_SERVICE, NULL);
+	if (error == 0)
+		double_lend_leaf_worker();	/* callee D; never returns */
+	if (errno != EEXIST)
+		err(EX_OSERR, "coregister leaf");
+
+	error = coregister(COLOCATION_DOUBLE_LEND_MIDDLE_SERVICE, NULL);
+	if (error == 0)
+		double_lend_middle_worker();	/* callee B, caller of D; never returns */
+	if (errno != EEXIST)
+		err(EX_OSERR, "coregister middle");
+
+	/* Both services taken: we are a caller (incumbent A or newcomer C). */
+	target = child_wait_for_service(COLOCATION_DOUBLE_LEND_MIDDLE_SERVICE);
+
+	/* Cache our pid before the cocall borrows us. */
+	my_pid = getpid();
+
+	msg.barrier = NULL;
+	msg.role = 0;
+	if (cocall(target, &msg, sizeof(msg), &msg, sizeof(msg)) < 0)
+		err(EX_OSERR, "cocall");
+
+	/*
+	 * The incumbent reports the verdict.  The newcomer is served too, then
+	 * just holds its own thread -- B has already released the incumbent --
+	 * so the incumbent stays the lone process that exits with the verdict.
+	 */
+	if (msg.role == CO_INCUMBENT)
+		double_lend_incumbent_verdict(msg.barrier, my_pid);
+	else
+		release_then_hold_thread(NULL);
+}
+
+/*
+ * Four colocated processes share one vmspace: B is the middle callee, D the
+ * leaf callee, A and C are callers (kernel threads TA, TB, TC, TD).  A is the
+ * incumbent -- served first, left hosted on B's thread TB, then holding without
+ * syscalling.  C is the newcomer; while serving C (running on TC) B makes a
+ * nested cocall to D, so two borrows are live at once: TB hosts A and B's
+ * current thread is lent onward to D.  Steps joined by commas are not ordered
+ * by the test -- the property holds for any interleaving of them.
+ *
+ *	A>B
+ *	B@
+ *	A<B	=> {TB->A}		; A left hosted on TB
+ *	C>B	=> {TB->A, TC->B}	; newcomer borrows B; A still on TB
+ *	B>D	=> {TB->A, TC->D}	; B nests into D with both borrows live
+ *	B<D	=> {TB->A, TC->B}	; D returns; B releases A with D's verdict
+ *	B@, C<B, A@			; after the release: B unborrows + replies to
+ *					;   C, A unborrows home |= {TA->A}
+ *
+ * Property under test: the incumbent's borrow record must survive the nested
+ * cocall, so A's later syscall still unborrows back to its own thread TA, and
+ * the nested callee D (checked via leaf_buf) sees its own pid.  On the current
+ * kernel the newcomer's cocall (C>B) overwrites the incumbent's record, so A's
+ * getpid finds nothing to unborrow, runs misattributed on TB, and reports the
+ * wrong pid.
+ */
+CHERIBSDTEST(colocation_double_lend_unborrow,
+    "While hosting an incumbent on its own thread, a callee that makes a nested "
+    "cocall must keep the incumbent's borrow record; the incumbent's later "
+    "syscall must still unborrow to its own thread (multi-client cocall)",
+    .ct_child_func = colocation_double_lend_dispatch,
+    .ct_xfail_reason =
+	"Multi-client cocall is not yet supported: the newcomer's cocall "
+	"overwrites the incumbent's borrow record")
+{
+	colocation_coexec_run(4, "incumbent saw the wrong pid");
+}
+
+#endif /* !CHERIBSD_C18N_TESTS */
+
+/* Excluded under c18n: a separate cocall fast-path issue causes SIGILL. */
+#ifndef CHERIBSD_C18N_TESTS
+
 #define	COLOCATION_SIGNAL_HOSTED_SERVICE	"colocation_signal_hosted"
 
 static void __dead2
