@@ -70,6 +70,7 @@
 
 #include <machine/asm.h>
 #include <sys/elf_common.h>
+#include <sys/syscall.h>
 
 #include "cheribsdtest_colocation_asm.h"
 
@@ -336,6 +337,76 @@ ENTRY(fp_register_check_via_coaccept)
 
 	RETURN
 END(fp_register_check_via_coaccept)
+
+/*
+ * void fp_register_check_across_unborrow(void *cookiep,
+ *     const void *markers, void *vals);
+ *
+ * Callee-side, like fp_register_check_via_coaccept, but issues a syscall
+ * (getpid) AFTER the coaccept resumes and BEFORE snapshotting q8-q15.
+ * The coaccept leaves this worker borrowed on the caller's kernel
+ * thread; the syscall triggers colocation_unborrow(), which migrates the
+ * worker back onto its own thread by swapping the trapframe.  The
+ * trapframe carries no FP/SIMD state, so this is the slow path on which
+ * callee-saved q8-q15 can be lost -- even with a single client.  getpid
+ * is integer-only and preserves q8-q15 by AAPCS, so any mismatch here is
+ * the unborrow's doing, not the syscall's.  The syscall is issued raw
+ * (no libc) so nothing AAPCS-compliant sits between the resume and the
+ * snapshot.
+ */
+ENTRY(fp_register_check_across_unborrow)
+	sub	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+	str	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	str	REG(2), [REGN(sp), #SAVED_VALS_OFF]
+
+	/* Save caller's q8-q15 (full 128 bits each). */
+	stp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	stp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 32)]
+	stp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 64)]
+	stp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 96)]
+
+	/* Load markers from REG(1) into q8-q15. */
+	ldp	q8,  q9,  [REG(1)]
+	ldp	q10, q11, [REG(1), #32]
+	ldp	q12, q13, [REG(1), #64]
+	ldp	q14, q15, [REG(1), #96]
+
+	/* Set up and issue the coaccept. */
+	mov	REG(1), REGN(sp)
+	mov	x2, #16
+	mov	REG(3), REGN(sp)
+	mov	x4, #16
+	bl	coaccept
+
+	/*
+	 * Now borrowed on the caller's thread: force the unborrow with a
+	 * raw getpid before snapshotting, so q8-q15 are sampled after the
+	 * kernel has migrated this worker back to its own thread.
+	 */
+	mov	x8, #SYS_getpid
+	svc	#0
+
+	/*
+	 * Snapshot post-unborrow q8-q15 through vals BEFORE restoring
+	 * caller's q8-q15.
+	 */
+	ldr	REG(9), [REGN(sp), #SAVED_VALS_OFF]
+	stp	q8,  q9,  [REG(9)]
+	stp	q10, q11, [REG(9), #32]
+	stp	q12, q13, [REG(9), #64]
+	stp	q14, q15, [REG(9), #96]
+
+	/* Restore caller's q8-q15. */
+	ldp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	ldp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 32)]
+	ldp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 64)]
+	ldp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 96)]
+
+	ldr	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	add	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+
+	RETURN
+END(fp_register_check_across_unborrow)
 
 /*
  * Direct switcher entry helper.
