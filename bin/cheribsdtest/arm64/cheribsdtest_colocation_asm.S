@@ -43,6 +43,7 @@
 
 #include <machine/asm.h>
 #include <sys/elf_common.h>
+#include <sys/syscall.h>
 
 #include "cheribsdtest_colocation_asm.h"
 
@@ -271,6 +272,85 @@ ENTRY(coaccept_with_fp_markers)
 
 	RETURN
 END(coaccept_with_fp_markers)
+
+/*
+ * The unborrow helper loads the markers only after coaccept() returns, and
+ * coaccept() may overwrite the register that holds the markers pointer, so
+ * the helper's frame has one more slot, to save that pointer.
+ */
+#define	SAVED_MARKERS_OFF	(SAVED_REGS_OFF + FP_SAVE_SIZE)
+#define	UNBORROW_FRAME_SIZE	(SAVED_MARKERS_OFF + REG_WIDTH)
+
+/*
+ * pid_t coaccept_then_unborrow_with_fp_markers(void *cookiep,
+ *     const struct fp_q_value *markers, struct fp_q_value *values);
+ *
+ * Zeroes q8-q15 and calls coaccept() with cookiep.  When coaccept()
+ * returns, this code runs on the thread of the process that made the
+ * cocall.  It then loads markers[0..7] into q8-q15, makes a getpid(2)
+ * syscall, which moves the code back to its own thread, and stores q8-q15
+ * to values[0..7] once the syscall returns.  Returns the pid from
+ * getpid(2), or -1 if coaccept() fails.
+ *
+ * The worker's own thread parks with q8-q15 zeroed, so the markers reach
+ * values[] only if they move with the code.
+ */
+ENTRY(coaccept_then_unborrow_with_fp_markers)
+	sub	REGN(sp), REGN(sp), #UNBORROW_FRAME_SIZE
+	str	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	str	REG(1), [REGN(sp), #SAVED_MARKERS_OFF]
+	str	REG(2), [REGN(sp), #SAVED_VALUES_OFF]
+
+	stp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	stp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 2 * Q_WIDTH)]
+	stp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 4 * Q_WIDTH)]
+	stp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 6 * Q_WIDTH)]
+
+	movi	v8.2d, #0
+	movi	v9.2d, #0
+	movi	v10.2d, #0
+	movi	v11.2d, #0
+	movi	v12.2d, #0
+	movi	v13.2d, #0
+	movi	v14.2d, #0
+	movi	v15.2d, #0
+
+	/* coaccept(cookiep, scratch, SCRATCH_SIZE, scratch, SCRATCH_SIZE) */
+	mov	REG(1), REGN(sp)
+	mov	x2, #SCRATCH_SIZE
+	mov	REG(3), REGN(sp)
+	mov	x4, #SCRATCH_SIZE
+	bl	coaccept
+
+	/* coaccept() failed: skip to the restore. */
+	tbnz	x0, #63, .Lrestore_callers_registers
+
+	ldr	REG(9), [REGN(sp), #SAVED_MARKERS_OFF]
+	ldp	q8,  q9,  [REG(9)]
+	ldp	q10, q11, [REG(9), #(2 * Q_WIDTH)]
+	ldp	q12, q13, [REG(9), #(4 * Q_WIDTH)]
+	ldp	q14, q15, [REG(9), #(6 * Q_WIDTH)]
+
+	mov	x8, #SYS_getpid
+	svc	#0
+
+	/* Store q8-q15 to values before restoring the caller's q8-q15. */
+	ldr	REG(9), [REGN(sp), #SAVED_VALUES_OFF]
+	stp	q8,  q9,  [REG(9)]
+	stp	q10, q11, [REG(9), #(2 * Q_WIDTH)]
+	stp	q12, q13, [REG(9), #(4 * Q_WIDTH)]
+	stp	q14, q15, [REG(9), #(6 * Q_WIDTH)]
+.Lrestore_callers_registers:
+	ldp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	ldp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 2 * Q_WIDTH)]
+	ldp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 4 * Q_WIDTH)]
+	ldp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 6 * Q_WIDTH)]
+
+	ldr	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	add	REGN(sp), REGN(sp), #UNBORROW_FRAME_SIZE
+
+	RETURN
+END(coaccept_then_unborrow_with_fp_markers)
 
 /*
  * The direct helper's frame starts like the others.  Its saved registers

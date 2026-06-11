@@ -1536,6 +1536,9 @@ ssize_t	cocall_with_gp_markers(void *target,
 ssize_t	coaccept_with_fp_markers(void *cookiep,
 	    const struct fp_q_value *markers, struct fp_q_value *values);
 
+pid_t	coaccept_then_unborrow_with_fp_markers(void *cookiep,
+	    const struct fp_q_value *markers, struct fp_q_value *values);
+
 ssize_t	coaccept_with_gp_markers(void *cookiep,
 	    void * const *markers, void **values);
 
@@ -1693,6 +1696,42 @@ colocation_callee_saved_fp_worker(void)
 		err(EX_OSERR, "coaccept");
 
 	if (coaccept(NULL, values, sizeof(values), &recv_buf,
+	    sizeof(recv_buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	errx(EX_SOFTWARE, "second coaccept returned");
+}
+
+/* Sent through coaccept(), whose buffers must be aligned to a capability. */
+struct fp_unborrow_response {
+	struct fp_q_value	values[FP_MARKER_COUNT];
+	pid_t			real_pid;
+	pid_t			observed_pid;
+};
+
+static void
+colocation_fp_across_unborrow_worker(void)
+{
+	intcap_t recv_buf = 0;
+	struct fp_q_value markers[FP_MARKER_COUNT];
+	struct fp_unborrow_response response;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_REGISTER_TEST_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	build_fp_markers(markers);
+	response.real_pid = getpid();
+
+	response.observed_pid = coaccept_then_unborrow_with_fp_markers(NULL,
+	    markers, response.values);
+
+	if (response.observed_pid < 0)
+		err(EX_OSERR, "coaccept");
+
+	if (coaccept(NULL, &response, sizeof(response), &recv_buf,
 	    sizeof(recv_buf)) < 0)
 		err(EX_OSERR, "coaccept");
 
@@ -1893,6 +1932,52 @@ CHERIBSDTEST(colocation_callee_saved_fp_via_coaccept,
 
 		build_fp_markers(markers);
 		check_fp_markers(markers, values, "coaccept");
+
+		cheribsdtest_success();
+	}
+}
+
+/*
+ * The test is A and the worker is B.  When B's code runs on A's thread TA,
+ * a syscall moves it back to B's own thread TB, and the values in q8-q15
+ * must move with it.  B loads the markers only once its code runs on TA,
+ * so they can reach TB only by moving with the code.  The pid check rules
+ * out a kernel that does not move the code at all: the syscall would then
+ * run as A, and the markers would stay on TA.
+ */
+CHERIBSDTEST(colocation_callee_saved_fp_across_unborrow,
+    "Check that a callee's q8-q15 move with its code when a syscall moves "
+    "the code back to its own thread",
+    .ct_child_func = colocation_fp_across_unborrow_worker,
+    .ct_xfail_reason =
+	"A syscall from hosted code moves its trapframe home but not its FP "
+	"registers")
+{
+	void *target;
+	struct fp_q_value markers[FP_MARKER_COUNT];
+	struct fp_unborrow_response response;
+	intcap_t send_buf = 0;
+	pid_t pid;
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("Fork failed");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_REGISTER_TEST_SERVICE,
+		    pid);
+
+		cocall_or_fail(target, &send_buf, sizeof(send_buf), &response,
+		    sizeof(response));
+
+		CHERIBSDTEST_VERIFY2(response.observed_pid == response.real_pid,
+		    "getpid() in the worker returned %d, want its own pid %d",
+		    response.observed_pid, response.real_pid);
+
+		build_fp_markers(markers);
+		check_fp_markers(markers, response.values, "the unborrow");
 
 		cheribsdtest_success();
 	}
