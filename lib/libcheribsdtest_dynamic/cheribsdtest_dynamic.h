@@ -32,6 +32,8 @@ ptraddr_t cheribsdtest_dynamic_get_dummy_fptr_addr(void);
 
 void * __capability cheribsdtest_dynamic_identity_cap(void * __capability cap);
 
+void * __capability cheribsdtest_dynamic_get_csp(void);
+
 int cheribsdtest_dynamic_ifunc(void);
 
 extern _Thread_local int cheribsdtest_dynamic_tls_var;

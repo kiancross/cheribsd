@@ -58,6 +58,10 @@
 #include <sysexits.h>
 #include <unistd.h>
 
+#ifdef CHERIBSD_DYNAMIC_TESTS
+#include <cheribsdtest_dynamic.h>
+#endif
+
 #include "cheribsdtest.h"
 
 static bool
@@ -1030,8 +1034,12 @@ register_across_coaccept_worker(void *(*read_register)(void))
 	errx(EX_SOFTWARE, "second coaccept returned");
 }
 
+typedef void register_check_t(const char *name, void *want, void *got,
+    const char *across);
+
 static void
-check_register_across_cocall(const char *name, void *(*read_register)(void))
+check_register_across_cocall(const char *name, void *(*read_register)(void),
+    register_check_t *check)
 {
 	void *target;
 	void *before;
@@ -1053,14 +1061,14 @@ check_register_across_cocall(const char *name, void *(*read_register)(void))
 		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
 		after = read_register();
 
-		check_same_capability(name, before, after, "cocall");
+		check(name, before, after, "cocall");
 
 		cheribsdtest_success();
 	}
 }
 
 static void
-check_register_across_coaccept(const char *name)
+check_register_across_coaccept(const char *name, register_check_t *check)
 {
 	void *target;
 	struct colocation_register_response response;
@@ -1087,8 +1095,7 @@ check_register_across_coaccept(const char *name)
 		cocall_or_fail(target, &send_buf, sizeof(send_buf),
 		    &response, sizeof(response));
 
-		check_same_capability(name, response.before, response.after,
-		    "coaccept");
+		check(name, response.before, response.after, "coaccept");
 
 		cheribsdtest_success();
 	}
@@ -1120,7 +1127,8 @@ CHERIBSDTEST(colocation_ctpidr_el0_via_cocall,
     .ct_child_func = colocation_echo_worker,
     .ct_xfail_reason = XFAIL_C18N_COCALL_FAULT)
 {
-	check_register_across_cocall("CTPIDR_EL0", read_ctpidr_el0);
+	check_register_across_cocall("CTPIDR_EL0", read_ctpidr_el0,
+	    check_same_capability);
 }
 
 CHERIBSDTEST(colocation_ctpidr_el0_via_coaccept,
@@ -1128,7 +1136,7 @@ CHERIBSDTEST(colocation_ctpidr_el0_via_coaccept,
     .ct_child_func = colocation_ctpidr_el0_worker,
     .ct_xfail_reason = XFAIL_C18N_COCALL_FAULT)
 {
-	check_register_across_coaccept("CTPIDR_EL0");
+	check_register_across_coaccept("CTPIDR_EL0", check_same_capability);
 }
 
 static void *
@@ -1161,7 +1169,8 @@ CHERIBSDTEST(colocation_csp_via_cocall,
     .ct_child_func = colocation_echo_worker,
     .ct_xfail_reason = XFAIL_C18N_COCALL_FAULT)
 {
-	check_register_across_cocall("stack pointer", read_csp);
+	check_register_across_cocall("stack pointer", read_csp,
+	    check_same_capability);
 }
 
 CHERIBSDTEST(colocation_csp_via_coaccept,
@@ -1169,7 +1178,83 @@ CHERIBSDTEST(colocation_csp_via_coaccept,
     .ct_child_func = colocation_csp_worker,
     .ct_xfail_reason = XFAIL_C18N_COCALL_FAULT)
 {
-	check_register_across_coaccept("stack pointer");
+	check_register_across_coaccept("stack pointer", check_same_capability);
+}
+
+/*
+ * Under c18n (library compartmentalisation), rtld splits a program into
+ * compartments, mostly one per library, each with its own stack.  On each
+ * call into a compartment, rtld finds that compartment's stack in the
+ * calling thread's stack table.  In the purecap ABI, rtld keeps a pointer
+ * to the table in the Executive-mode CTPIDR_EL0, which compartment code
+ * cannot read.
+ *
+ * libcheribsdtest_dynamic is a compartment of its own, so its stack shows
+ * which table the thread holds.  cheribsdtest's own stack would not: rtld
+ * reads the table on a call into a compartment but not on a return to one,
+ * and no call enters cheribsdtest's compartment during a test.
+ *
+ * check_register_across_cocall() and register_across_coaccept_worker() call
+ * this function through a pointer.  By default, a call through a pointer
+ * stays in the caller's compartment, so this function calls the library by
+ * name.
+ */
+static void *
+read_library_csp(void)
+{
+	return (cheribsdtest_dynamic_get_csp());
+}
+
+/*
+ * The library's first call runs on a stack capability with the SW_VMEM
+ * permission, and rtld removes that permission for later calls, so this
+ * compares bounds rather than whole capabilities.
+ */
+static void
+check_same_stack(const char *name, void *want, void *got, const char *across)
+{
+	if (cheri_gettag(got) && cheri_gettag(want) &&
+	    cheri_getbase(got) == cheri_getbase(want) &&
+	    cheri_getlen(got) == cheri_getlen(want))
+		return;
+
+	cheribsdtest_failure_errx("%s changed across %s: got %#p, want %#p",
+	    name, across, got, want);
+}
+
+/*
+ * The stack table tests read the library's stack before and after cocall()
+ * or coaccept(), and check that it is the same.  If the thread holds
+ * another process's table after cocall() or coaccept(), rtld gives the
+ * library that process's stack, or a new one if that process has none.
+ * Without c18n, the library runs on the caller's stack, and the tests
+ * check only what the stack pointer tests check.
+ *
+ * The cocall() test catches a switcher that does not restore the caller's
+ * stack table.  The coaccept() test catches one that does not give the
+ * callee its own.
+ */
+static void
+colocation_stack_table_worker(void)
+{
+	register_across_coaccept_worker(read_library_csp);
+}
+
+CHERIBSDTEST(colocation_stack_table_via_cocall,
+    "Check that a caller keeps its own c18n stack table across cocall()",
+    .ct_child_func = colocation_echo_worker,
+    .ct_xfail_reason = XFAIL_C18N_COCALL_FAULT)
+{
+	check_register_across_cocall("library stack", read_library_csp,
+	    check_same_stack);
+}
+
+CHERIBSDTEST(colocation_stack_table_via_coaccept,
+    "Check that a callee keeps its own c18n stack table across coaccept()",
+    .ct_child_func = colocation_stack_table_worker,
+    .ct_xfail_reason = XFAIL_C18N_COCALL_FAULT)
+{
+	check_register_across_coaccept("library stack", check_same_stack);
 }
 #endif /* defined(__aarch64__) */
 #endif
