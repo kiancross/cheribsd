@@ -1130,6 +1130,47 @@ CHERIBSDTEST(colocation_ctpidr_el0_via_coaccept,
 {
 	check_register_across_coaccept("CTPIDR_EL0");
 }
+
+static void *
+read_csp(void)
+{
+	void *v;
+
+	__asm__ __volatile__ ("mov %0, csp" : "=C" (v));
+	return (v);
+}
+
+/*
+ * The stack pointer tests read the register before and after the call,
+ * rather than loading a marker into it, because the code in between
+ * needs a working stack.  In c18n's purecap ABI, they run in Restricted
+ * mode, where the stack pointer is RCSP_EL0.
+ *
+ * The cocall() test catches a switcher that restores the wrong stack
+ * pointer to the caller.  The coaccept() test catches one that does not
+ * switch to the callee's stack.
+ */
+static void
+colocation_csp_worker(void)
+{
+	register_across_coaccept_worker(read_csp);
+}
+
+CHERIBSDTEST(colocation_csp_via_cocall,
+    "Check that a caller's stack pointer keeps its value across cocall()",
+    .ct_child_func = colocation_echo_worker,
+    .ct_xfail_reason = XFAIL_C18N_COCALL_FAULT)
+{
+	check_register_across_cocall("stack pointer", read_csp);
+}
+
+CHERIBSDTEST(colocation_csp_via_coaccept,
+    "Check that a callee's stack pointer keeps its value across coaccept()",
+    .ct_child_func = colocation_csp_worker,
+    .ct_xfail_reason = XFAIL_C18N_COCALL_FAULT)
+{
+	check_register_across_coaccept("stack pointer");
+}
 #endif /* defined(__aarch64__) */
 #endif
 
