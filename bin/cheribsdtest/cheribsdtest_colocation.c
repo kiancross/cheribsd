@@ -228,8 +228,6 @@ CHERIBSDTEST(colocation_coaccept_slow,
 		 * We need to wait for the child to coregister. Right
 		 * now the best we can do is spin unless we use a pipe/socket
 		 * to synchronize.
-		 *
-		 * XXX: set a timeout?
 		 */
 		while ((error = colookup(/* ctp->ct_name */ "XXX", &target)) != 0 &&
 		    errno == ESRCH && waitpid(fork_pid, &res, WNOHANG) == 0)
@@ -241,8 +239,6 @@ CHERIBSDTEST(colocation_coaccept_slow,
 		 * There's potential race between a successful colookup
 		 * following the child's coregister and the child entering
 		 * coaccept so we loop if we lose the race.
-		 *
-		 * XXX: set a timeout?
 		 */
 		while ((error = cocall_slow(target, &my_pid, sizeof(my_pid),
 		    &recvd_pid, sizeof(recvd_pid))) < 0 && errno == EAGAIN)

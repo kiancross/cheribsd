@@ -2,11 +2,19 @@
  * Copyright (c) 2012-2018, 2020 Robert N. M. Watson
  * Copyright (c) 2014-2016 SRI International
  * Copyright (c) 2021 Microsoft Corp.
+ * Copyright (c) 2026 Kian Cross
  * All rights reserved.
  *
  * This software was developed by SRI International and the University of
  * Cambridge Computer Laboratory under DARPA/AFRL contract (FA8750-10-C-0237)
  * ("CTSRD"), as part of the DARPA CRASH research programme.
+ *
+ * Portions of this software were developed by Kian Cross at the
+ * University of Cambridge Computer Laboratory (Department of Computer
+ * Science and Technology) under Defense Advanced Research Projects
+ * Agency / Air Force Research Laboratory (DARPA/AFRL) Contract
+ * No. FA8750-24-C-B047 ("DEC"), with additional support from a grant
+ * from Google, Inc., and the Jesus College Embiricos Trust Scholarship.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,7 +46,9 @@
 
 #include <sys/param.h>
 #include <sys/auxv.h>
+#include <sys/event.h>
 #include <sys/mman.h>
+#include <sys/procctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
@@ -60,6 +70,7 @@
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <malloc_np.h>
 #include <signal.h>
 #include <spawn.h>
@@ -102,6 +113,18 @@ static int sleep_after_test;
 static int coredump_enabled;
 static int debugger_enabled;
 
+/*
+ * cheribuild stops a cheribsdtest binary that runs for more than five minutes,
+ * and loses all of its results, so the limit leaves room for several hung
+ * tests in one binary.
+ */
+#define	TEST_TIMEOUT_SECONDS	20
+
+/* A test marked slow may need far longer than the others. */
+#define	SLOW_TEST_TIMEOUT_FACTOR	10
+
+static int test_timeout_seconds = TEST_TIMEOUT_SECONDS;
+
 int verbose;
 
 extern char **environ;
@@ -122,6 +145,9 @@ usage(void)
 "    -c  -- Enable core dumps\n"
 "    -d  -- Attach debugger before running test\n"
 "    -s  -- Sleep one second after each test\n"
+"    -t <seconds>  -- Time out a test after <seconds>, or never if 0\n"
+"                     (default " __XSTRING(TEST_TIMEOUT_SECONDS)
+"; slow tests get " __XSTRING(SLOW_TEST_TIMEOUT_FACTOR) " times as long)\n"
 "    -q  -- Enable qemu tracing in test process\n"
 "    -Q  -- Enable qemu tracing in test process (user-mode only)\n"
 "    -v  -- Increase verbosity\n"
@@ -224,11 +250,56 @@ set_thread_tracing(void)
 /* Maximum size of stdout data we will check if called for by a test. */
 #define	TEST_BUFFER_LEN	1024
 
+/*
+ * Returns false if the test child is still running when the timeout ends.
+ * A NULL timeout waits for ever.
+ */
+static bool
+wait_for_test_child(pid_t childpid, int *status,
+    const struct timespec *timeout)
+{
+	struct kevent kev;
+	int kq, nevents;
+
+	kq = kqueue();
+	if (kq < 0)
+		err(EX_OSERR, "kqueue");
+
+	/*
+	 * The child stays a zombie until waitpid(), and kevent() reports
+	 * NOTE_EXIT for a zombie immediately, so starting to watch for its
+	 * exit after fork() cannot miss it.
+	 */
+	EV_SET(&kev, childpid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+
+	/* Stopping and continuing cheribsdtest interrupts kevent(). */
+	do {
+		nevents = kevent(kq, &kev, 1, &kev, 1, timeout);
+	} while (nevents < 0 && errno == EINTR);
+
+	if (nevents < 0)
+		err(EX_OSERR, "kevent");
+
+	if (nevents == 1 && (kev.flags & EV_ERROR) != 0)
+		errc(EX_OSERR, (int)kev.data, "kevent");
+
+	close(kq);
+
+	if (nevents == 0)
+		return (false);
+
+	(void)waitpid(childpid, status, 0);
+	return (true);
+}
+
 static void
 cheribsdtest_run_test(const struct cheri_test *ctp)
 {
+	struct procctl_reaper_kill rk;
 	struct sigaction sa;
+	struct timespec timeout;
 	pid_t childpid;
+	bool timed_out;
 	int status, pipefd_stdin[2], pipefd_stdout[2];
 	char reason[TESTRESULT_STR_LEN * 2]; /* Potential output, plus some extra */
 	char visreason[sizeof(reason) * 4]; /* Space for vis(3) the string */
@@ -247,6 +318,7 @@ cheribsdtest_run_test(const struct cheri_test *ctp)
 	reason[0] = '\0';
 	visreason[0] = '\0';
 	xfail_reason = NULL;
+	timed_out = false;
 
 	for (size_t i = 0; i < nitems(disallowed_prefixes); i++) {
 		if (strncmp(ctp->ct_name, disallowed_prefixes[i],
@@ -395,7 +467,13 @@ cheribsdtest_run_test(const struct cheri_test *ctp)
 		system(command);
 	}
 
-	(void)waitpid(childpid, &status, 0);
+	timeout.tv_sec = test_timeout_seconds;
+	if ((ctp->ct_flags & CT_FLAG_SLOW) != 0)
+		timeout.tv_sec *= SLOW_TEST_TIMEOUT_FACTOR;
+	timeout.tv_nsec = 0;
+
+	timed_out = !wait_for_test_child(childpid, &status,
+	    test_timeout_seconds == 0 ? NULL : &timeout);
 
 	/*
 	 * If the test explicitly signalled failure for some reason, report
@@ -412,6 +490,13 @@ cheribsdtest_run_test(const struct cheri_test *ctp)
 		    '\0';
 		memcpy(reason, ccsp->ccs_testresult_str,
 		    sizeof(ccsp->ccs_testresult_str));
+		goto fail;
+	}
+
+	if (timed_out) {
+		snprintf(reason, sizeof(reason),
+		    "Test timed out after %jd seconds",
+		    (intmax_t)timeout.tv_sec);
 		goto fail;
 	}
 
@@ -617,6 +702,26 @@ fail:
 do_return:
 	xo_close_instance("testcase");
 	xo_flush();
+
+	/*
+	 * Once the verdict is printed, send SIGKILL to every process the test
+	 * left running, and collect each one that has exited.  Killing a
+	 * process in a cocall can hang or panic the kernel, so the kill waits
+	 * until the verdict has been printed.  A timed-out test's child gets
+	 * up to five seconds to exit before the next test starts.  Because of
+	 * a bug in cocalls, SIGKILL cannot end some of these processes, so any
+	 * still running are left.
+	 */
+	bzero(&rk, sizeof(rk));
+	rk.rk_sig = SIGKILL;
+	(void)procctl(P_PID, getpid(), PROC_REAP_KILL, &rk);
+	if (timed_out) {
+		timeout.tv_sec = 5;
+		(void)wait_for_test_child(childpid, &status, &timeout);
+	}
+	while (waitpid(-1, NULL, WNOHANG) > 0)
+		;
+
 	close(pipefd_stdin[1]);
 	close(pipefd_stdout[0]);
 	if (sleep_after_test)
@@ -819,14 +924,14 @@ main(int argc, char *argv[])
 	int i;
 	uint qemu_trace_perthread;
 	size_t len;
-	const char *sep;
+	const char *errstr, *sep;
 	struct cheri_test **ctp, *ct;
 
 	argv0 = argv[0];
 	argc = xo_parse_args(argc, argv);
 	if (argc < 0)
 		errx(1, "xo_parse_args failed\n");
-	while ((opt = getopt(argc, argv, "acdEfglQqsuvx")) != -1) {
+	while ((opt = getopt(argc, argv, "acdEfglQqst:uvx")) != -1) {
 		switch (opt) {
 		case 'a':
 			run_all = 1;
@@ -866,6 +971,12 @@ main(int argc, char *argv[])
 			break;
 		case 's':
 			sleep_after_test = 1;
+			break;
+		case 't':
+			test_timeout_seconds = strtonum(optarg, 0, INT_MAX,
+			    &errstr);
+			if (errstr != NULL)
+				errx(EX_USAGE, "-t %s: %s", optarg, errstr);
 			break;
 		case 'v':
 			verbose++;
@@ -955,6 +1066,15 @@ main(int argc, char *argv[])
 		if (setrlimit(RLIMIT_CORE, &rl) < 0)
 			err(EX_OSERR, "setrlimit");
 	}
+
+	/*
+	 * Become the reaper of every process that a test starts: an orphaned
+	 * descendant is handed to cheribsdtest rather than to init, so that
+	 * the processes a test leaves running can still be killed after its
+	 * verdict.
+	 */
+	if (procctl(P_PID, getpid(), PROC_REAP_ACQUIRE, NULL) != 0)
+		err(EX_OSERR, "procctl");
 
 	cheri_skipped_tests = sl_init();
 	cheri_failed_tests = sl_init();
