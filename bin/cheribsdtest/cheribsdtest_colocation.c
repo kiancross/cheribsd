@@ -1247,13 +1247,6 @@ CHERIBSDTEST(colocation_pending_incumbent_vacate,
     "pending, the first caller's next syscall runs on its own thread as "
     "itself (multi-client cocall)",
     .ct_child_func = colocation_pending_incumbent_child,
-    /*
-     * XXX: on SMP, both cocalls can enter B at the same time, because the
-     * switcher's lock is a plain load and store.  The test then hangs until
-     * cheribsdtest times it out, and a later SIGKILL to its remaining
-     * processes panics the kernel.
-     */
-    .ct_check_skip = skip_known_panic,
     .ct_xfail_reason =
 	"Multi-client cocall is not yet supported: a second caller's cocall "
 	"clears the first caller's borrow record")
@@ -1924,18 +1917,6 @@ struct one_callee_shared_state {
 	atomic_int	arrivals;
 };
 
-static const char *
-skip_without_parallel_cpus_or_known_panic(const struct cheri_test *ctp)
-{
-	const char *reason;
-
-	reason = skip_without_parallel_cpus(ctp);
-	if (reason != NULL)
-		return (reason);
-
-	return (skip_known_panic(ctp));
-}
-
 static void
 pin_caller_to_cpu(int caller_index)
 {
@@ -2059,15 +2040,7 @@ CHERIBSDTEST(colocation_one_callee_at_a_time,
     "Check that two cocalls never enter one callee at the same time",
     .ct_flags = CT_FLAG_SLOW,
     .ct_child_func = colocation_one_callee_at_a_time_child,
-    /*
-     * XXX: when two cocalls enter B at the same time, both copies of B's code
-     * reply to the same caller, whose code then runs on two threads.  This can
-     * panic the kernel.
-     */
-    .ct_check_skip = skip_without_parallel_cpus_or_known_panic,
-    .ct_xfail_reason =
-	"The cocall switcher's lock is not atomic, so two cocalls can enter "
-	"one callee at the same time")
+    .ct_check_skip = skip_without_parallel_cpus)
 {
 	run_colocated_children(3,
 	    "two cocalls ran the callee at the same time");
