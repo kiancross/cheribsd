@@ -38,6 +38,7 @@
 
 #include <sys/param.h>
 #include <sys/auxv.h>
+#include <sys/event.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -224,11 +225,53 @@ set_thread_tracing(void)
 /* Maximum size of stdout data we will check if called for by a test. */
 #define	TEST_BUFFER_LEN	1024
 
+/* Far longer than any test takes on QEMU. */
+#define	TEST_TIMEOUT_SECONDS	(5 * 60)
+
+/*
+ * Returns false if the test child is still running when the timeout ends.
+ * A NULL timeout waits for ever.
+ */
+static bool
+wait_for_test_child(pid_t childpid, int *status,
+    const struct timespec *timeout)
+{
+	struct kevent kev;
+	int kq, nevents;
+
+	kq = kqueue();
+	if (kq < 0)
+		err(EX_OSERR, "kqueue");
+
+	/*
+	 * The child stays a zombie until waitpid(), and kevent() reports
+	 * NOTE_EXIT for a zombie immediately, so starting to watch for its
+	 * exit after fork() cannot miss it.
+	 */
+	EV_SET(&kev, childpid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+	nevents = kevent(kq, &kev, 1, &kev, 1, timeout);
+	if (nevents < 0)
+		err(EX_OSERR, "kevent");
+
+	if (nevents == 1 && (kev.flags & EV_ERROR) != 0)
+		errc(EX_OSERR, (int)kev.data, "kevent");
+
+	close(kq);
+
+	if (nevents == 0)
+		return (false);
+
+	(void)waitpid(childpid, status, 0);
+	return (true);
+}
+
 static void
 cheribsdtest_run_test(const struct cheri_test *ctp)
 {
 	struct sigaction sa;
+	struct timespec timeout;
 	pid_t childpid;
+	bool timed_out;
 	int status, pipefd_stdin[2], pipefd_stdout[2];
 	char reason[TESTRESULT_STR_LEN * 2]; /* Potential output, plus some extra */
 	char visreason[sizeof(reason) * 4]; /* Space for vis(3) the string */
@@ -247,6 +290,7 @@ cheribsdtest_run_test(const struct cheri_test *ctp)
 	reason[0] = '\0';
 	visreason[0] = '\0';
 	xfail_reason = NULL;
+	timed_out = false;
 
 	for (size_t i = 0; i < nitems(disallowed_prefixes); i++) {
 		if (strncmp(ctp->ct_name, disallowed_prefixes[i],
@@ -395,7 +439,12 @@ cheribsdtest_run_test(const struct cheri_test *ctp)
 		system(command);
 	}
 
-	(void)waitpid(childpid, &status, 0);
+	timeout.tv_sec = TEST_TIMEOUT_SECONDS;
+	timeout.tv_nsec = 0;
+
+	/* Under a debugger, a person may stop the test for a long time. */
+	timed_out = !wait_for_test_child(childpid, &status,
+	    debugger_enabled ? NULL : &timeout);
 
 	/*
 	 * If the test explicitly signalled failure for some reason, report
@@ -412,6 +461,13 @@ cheribsdtest_run_test(const struct cheri_test *ctp)
 		    '\0';
 		memcpy(reason, ccsp->ccs_testresult_str,
 		    sizeof(ccsp->ccs_testresult_str));
+		goto fail;
+	}
+
+	if (timed_out) {
+		snprintf(reason, sizeof(reason),
+		    "Test timed out after %jd seconds",
+		    (intmax_t)timeout.tv_sec);
 		goto fail;
 	}
 
@@ -617,6 +673,18 @@ fail:
 do_return:
 	xo_close_instance("testcase");
 	xo_flush();
+
+	/*
+	 * Kill the child of a test that timed out only once the verdict is
+	 * printed, because the child may be in a cocall, and killing a process
+	 * in a cocall can hang or panic the kernel.  Only the direct child is
+	 * killed; the children that coexecuted into it are left.
+	 */
+	if (timed_out) {
+		(void)kill(childpid, SIGKILL);
+		(void)waitpid(childpid, NULL, 0);
+	}
+
 	close(pipefd_stdin[1]);
 	close(pipefd_stdout[0]);
 	if (sleep_after_test)
