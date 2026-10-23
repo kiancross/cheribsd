@@ -91,6 +91,7 @@ SWITCHER_ENTRY(switcher_coaccept)
 	 */
 	cgetlen	t1, caller
 	bnez	t1, .Lhave_caller
+	fence	rw, w
 	csc	cnull, SCB_CALLER_SCB(callee)
 	li	t0, SYS_covacate
 	ecall
@@ -154,9 +155,12 @@ SWITCHER_ENTRY(switcher_coaccept)
 
 	/*
 	 * Zero out the caller's scb_target_scb and our scb_caller_scb,
-	 * releasing the spinlock.
+	 * releasing the spinlock.  With the fence before the store, a caller
+	 * that takes the lock next also sees the callee's context saved
+	 * above.
 	 */
 	csc	cnull, SCB_TARGET_SCB(caller)
+	fence	rw, w
 	csc	cnull, SCB_CALLER_SCB(callee)
 
 	li	t0, 0

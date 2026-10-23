@@ -81,25 +81,22 @@ SWITCHER_ENTRY(switcher_cocall)
 	 */
 	csc	callee, SCB_TARGET_SCB(caller)
 .Ltake_lock:
-#ifdef notyet
 	/*
 	 * Save the capability to the caller's control block in the callee
-	 * context.  This also serves as the callee's spinlock.
+	 * context.  This also serves as the callee's spinlock.  The
+	 * load-reserved and store-conditional pair stops two callers on
+	 * different CPUs from both taking it.  The acquire pairs with
+	 * coaccept's release of the spinlock (a fence, then a plain store),
+	 * so we read the callee's context only after the callee has saved
+	 * it.  The release also means that the callee's reply, which takes
+	 * our SCB's address from the lock, sees the registers saved above,
+	 * even if the reply runs on another CPU.
 	 */
-	clr.c	ct1, (callee)
+	clr.c.aq	ct1, SCB_CALLER_SCB(callee)
 	cgettag	t2, ct1
 	bnez	t2, .Llock_busy
-	csc.c	ct3, caller, (callee)
-	beqz	t3, .Ltake_lock
-#else
-	/*
-	 * Implement a trivial almost-spinlock.
-	 */
-	clc	ct1, SCB_CALLER_SCB(callee)
-	cgettag	t2, ct1
-	bnez	t2, .Llock_busy
-	csc	caller, SCB_CALLER_SCB(callee)
-#endif
+	csc.c.rl	t3, caller, SCB_CALLER_SCB(callee)
+	bnez	t3, .Ltake_lock
 
 	/*
 	 * If scb_borrower_td in the callee's scb is NULL, then
@@ -245,6 +242,7 @@ SWITCHER_MARKER(switcher_cocall_copy_onfault)
 	beqz	t2, .Lonfault_cookie_done
 	csc	cnull, (ct2)
 .Lonfault_cookie_done:
+	fence	rw, w
 	csc	cnull, SCB_CALLER_SCB(ct1)
 
 	/* Clear state in the caller's scb. */

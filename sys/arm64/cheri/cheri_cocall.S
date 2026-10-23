@@ -112,25 +112,22 @@ SWITCHER_ENTRY(switcher_cocall)
 	 */
 	str	c8, SCB_TARGET_SCB(c29)
 .Ltake_lock:
-#ifdef notyet
 	/*
 	 * Save the capability to the caller's control block in the callee
-	 * context.  This also serves as the callee's spinlock.
+	 * context.  This also serves as the callee's spinlock.  The
+	 * exclusive pair stops two callers on different CPUs from both
+	 * taking it.  The load-acquire pairs with the store-release that
+	 * frees the spinlock in coaccept, so we read the callee's context
+	 * only after the callee has saved it.  The store-release also
+	 * means that the callee's reply, which takes our SCB's address
+	 * from the lock, sees the registers saved above, even if the
+	 * reply runs on another CPU.
 	 */
-	clr.c	c9, (c8)
-	cgettag	x10, c9
-	bnez	x10, .Llock_busy
-	csc.c	x11, c29, (c8)
-	beqz	x11, .Ltake_lock
-#else
-	/*
-	 * Implement a trivial almost-spinlock.
-	 */
-	ldr	c9, SCB_CALLER_SCB(c8)
+	ldaxr	c9, SCB_CALLER_SCB(c8)
 	gctag	x10, c9
 	cbnz	x10, .Llock_busy
-	str	c29, SCB_CALLER_SCB(c8)
-#endif
+	stlxr	w11, c29, SCB_CALLER_SCB(c8)
+	cbnz	w11, .Ltake_lock
 
 	/*
 	 * If scb_borrower_td in the callee's scb is NULL, then
@@ -281,6 +278,7 @@ SWITCHER_MARKER(switcher_cocall_copy_end)
 	 * No: length zero means we need to return error encoded as offset.
 	 * Set the carry bit to let the libc stub know it's an error.
 	 */
+	clrex		/* Do not return to user code with the monitor armed */
 	gcoff	x0, c9
 	subs	x0, x0, #0
 	b	.Lreturn
@@ -294,7 +292,7 @@ SWITCHER_MARKER(switcher_cocall_copy_onfault)
 	cbz	x10, .Lonfault_cookie_done
 	str	czr, [c10]
 .Lonfault_cookie_done:
-	str	czr, SCB_CALLER_SCB(c9)
+	stlr	czr, SCB_CALLER_SCB(c9)
 
 	/* Clear state in the caller's scb. */
 	str	czr, SCB_BORROWER_TD(c29)

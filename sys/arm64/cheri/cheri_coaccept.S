@@ -120,7 +120,7 @@ SWITCHER_ENTRY(switcher_coaccept)
 	 */
 	gclen	x9, c8
 	cbnz	x9, .Lhave_caller
-	str	czr, SCB_CALLER_SCB(c29)
+	stlr	czr, SCB_CALLER_SCB(c29)
 	mov	x8, SYS_covacate
 	svc	#0
 
@@ -211,10 +211,11 @@ SWITCHER_ENTRY(switcher_coaccept)
 
 	/*
 	 * Zero out the caller's scb_target_scb and our scb_caller_scb,
-	 * releasing the spinlock.
+	 * releasing the spinlock.  With the store-release, a caller that
+	 * takes the lock next also sees the callee's context saved above.
 	 */
 	str	czr, SCB_TARGET_SCB(c8)
-	str	czr, SCB_CALLER_SCB(c29)
+	stlr	czr, SCB_CALLER_SCB(c29)
 
 	/*
 	 * Return success; clear the carry flag.
