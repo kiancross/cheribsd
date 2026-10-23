@@ -39,6 +39,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/cpuset.h>
 #include <sys/procdesc.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
@@ -48,6 +49,7 @@
 
 #include <err.h>
 #include <errno.h>
+#include <kenv.h>
 #include <kvm.h>
 #include <libprocstat.h>
 #include <signal.h>
@@ -150,6 +152,38 @@ CHERIBSDTEST(colocation_coexec_child,
 		}
 	}
 }
+
+#ifndef CHERIBSD_C18N_TESTS
+static void
+allowed_cpus(cpuset_t *mask)
+{
+	if (cpuset_getaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, -1,
+	    sizeof(*mask), mask) != 0)
+		err(EX_OSERR, "cpuset_getaffinity");
+}
+
+/*
+ * A race test needs its racing code to run truly in parallel.  On one CPU it
+ * never does, and Morello QEMU runs its virtual CPUs one at a time, so in both
+ * cases the test could not catch the race.
+ */
+static const char *
+skip_without_parallel_cpus(const struct cheri_test *ctp __unused)
+{
+	char maker[16];
+	cpuset_t mask;
+
+	allowed_cpus(&mask);
+	if (CPU_COUNT(&mask) < 2)
+		return ("Needs two CPUs");
+
+	if (kenv(KENV_GET, "smbios.system.maker", maker, sizeof(maker)) != -1 &&
+	    strcmp(maker, "QEMU") == 0)
+		return ("Needs CPUs that run in parallel, which QEMU lacks");
+
+	return (NULL);
+}
+#endif
 
 /*
  * colocation_coaccept_slow - test runner, forks and
@@ -1469,6 +1503,179 @@ CHERIBSDTEST(colocation_signal_while_hosted,
 	"where its code runs")
 {
 	run_colocated_children(2, "signal not delivered to hosted code");
+}
+
+#define	COLOCATION_ONE_CALLEE_SERVICE	"colocation_one_callee_at_a_time"
+
+/*
+ * In 20 runs on a 4-CPU Morello board, the test failed after 33117 rounds on
+ * average, and after 252501 at most.  The test runs at least 14 times the
+ * average and twice the maximum, so that it misses the race in fewer than one
+ * run in a million.
+ */
+#define	ONE_CALLEE_ROUNDS		1000000
+
+/*
+ * Long enough that, when two cocalls enter B together, the second enters B's
+ * code before the first leaves it, and so sees the first.
+ */
+#define	ONE_CALLEE_SERVICE_ITERATIONS	1000UL
+
+struct one_callee_shared_state {
+	atomic_int	in_flight;	/* cocalls in B's code */
+	atomic_bool	overlap_seen;
+	atomic_int	caller_count;
+	/* Calls to one_callee_wait_for_other_caller(). */
+	atomic_int	arrivals;
+};
+
+static const char *
+skip_without_parallel_cpus_or_known_panic(const struct cheri_test *ctp)
+{
+	const char *reason;
+
+	reason = skip_without_parallel_cpus(ctp);
+	if (reason != NULL)
+		return (reason);
+
+	return (skip_known_panic(ctp));
+}
+
+static void
+pin_caller_to_cpu(int caller_index)
+{
+	cpuset_t mask;
+	int cpu, n;
+
+	allowed_cpus(&mask);
+
+	n = 0;
+	CPU_FOREACH_ISSET(cpu, &mask) {
+		if (n++ == caller_index)
+			break;
+	}
+
+	CPU_SETOF(cpu, &mask);
+	if (cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, -1,
+	    sizeof(mask), &mask) != 0)
+		err(EX_OSERR, "cpuset_setaffinity");
+}
+
+static void __dead2
+one_callee_overlap_check_callee(void)
+{
+	/* The callers also use this, through the pointer in each reply. */
+	static struct one_callee_shared_state state;
+
+	struct one_callee_shared_state *msg;
+
+	for (;;) {
+		msg = &state;
+		if (coaccept(NULL, &msg, sizeof(msg), &msg, sizeof(msg)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		/*
+		 * No syscall until the reply, because a syscall would move B's
+		 * code back to TB.
+		 */
+		if (atomic_fetch_add(&state.in_flight, 1) != 0)
+			atomic_store(&state.overlap_seen, true);
+
+		burn_cpu(ONE_CALLEE_SERVICE_ITERATIONS);
+		atomic_fetch_sub(&state.in_flight, 1);
+	}
+}
+
+/*
+ * Waits until the other caller reaches this round too, so that the two
+ * cocalls reach B's lock at about the same time.
+ *
+ * If B saw two cocalls at the same time in the round before, this function
+ * exits with a failure rather than wait, because one of B's callers never gets
+ * a reply and so never arrives here.
+ */
+static void
+one_callee_wait_for_other_caller(struct one_callee_shared_state *state,
+    int round)
+{
+	atomic_fetch_add(&state->arrivals, 1);
+
+	while (atomic_load(&state->arrivals) < 2 * round &&
+	    !atomic_load(&state->overlap_seen))
+		;
+
+	/* The overlap was in the cocalls of the round before this one. */
+	if (atomic_load(&state->overlap_seen))
+		errx(EX_SOFTWARE,
+		    "two cocalls in B's code at the same time in round %d",
+		    round - 1);
+}
+
+static void
+colocation_one_callee_at_a_time_child(void)
+{
+	struct one_callee_shared_state *state;
+	void *target;
+	int caller_index, round;
+
+	if (coregister_wins(COLOCATION_ONE_CALLEE_SERVICE))
+		one_callee_overlap_check_callee();	/* callee B */
+
+	target = child_wait_for_service(COLOCATION_ONE_CALLEE_SERVICE);
+
+	state = NULL;
+	if (cocall(target, &state, sizeof(state), &state, sizeof(state)) < 0)
+		err(EX_OSERR, "cocall");
+
+	caller_index = atomic_fetch_add(&state->caller_count, 1);
+	pin_caller_to_cpu(caller_index);
+
+	for (round = 1; round <= ONE_CALLEE_ROUNDS; round++) {
+		one_callee_wait_for_other_caller(state, round);
+
+		if (cocall(target, &state, sizeof(state), &state,
+		    sizeof(state)) < 0)
+			err(EX_OSERR, "cocall");
+	}
+
+	/*
+	 * Wait until both callers have finished their last cocall, so that no
+	 * cocall is in B's code when caller 0 exits with the verdict and the
+	 * test kills B.
+	 */
+	one_callee_wait_for_other_caller(state, ONE_CALLEE_ROUNDS + 1);
+
+	if (caller_index == 0)
+		exit(0);
+
+	report_pid_release_then_hold(NULL);
+}
+
+/*
+ * Three colocated processes share one vmspace: B is the callee (the coregister
+ * winner), and A and C are callers on different CPUs, with kernel threads TA,
+ * TB, and TC.  A and C each cocall B many times, and start each round
+ * together.  B records whether its code ever runs for two cocalls at the same
+ * time.
+ *
+ * Property under test: B's code runs for one cocall at a time.
+ */
+CHERIBSDTEST(colocation_one_callee_at_a_time,
+    "Check that two cocalls never enter one callee at the same time",
+    .ct_flags = CT_FLAG_SLOW,
+    .ct_child_func = colocation_one_callee_at_a_time_child,
+    /*
+     * XXX: when two cocalls enter B at the same time, both copies of B's code
+     * reply to the same caller, whose code then runs on two threads.  This can
+     * panic the kernel.
+     */
+    .ct_check_skip = skip_without_parallel_cpus_or_known_panic,
+    .ct_xfail_reason =
+	"The cocall switcher's lock is not atomic, so two cocalls can enter "
+	"one callee at the same time")
+{
+	run_colocated_children(3,
+	    "two cocalls ran the callee at the same time");
 }
 
 #endif /* !CHERIBSD_C18N_TESTS */
