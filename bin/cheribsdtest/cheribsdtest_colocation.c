@@ -1003,10 +1003,9 @@ CHERIBSDTEST(colocation_pending_incumbent_unborrow,
 	"clears the first caller's borrow record")
 {
 	/*
-	 * XXX: on SMP, both callers' cocalls can enter B at once, because the
-	 * switcher's lock is a plain load and store.  The test then hangs
-	 * until cheribsdtest times it out, and a later SIGKILL to its
-	 * remaining processes panics the kernel.
+	 * XXX: the check fails with a wrong pid.  Whether a failing run, or a
+	 * later SIGKILL to its processes, panics the kernel has not been
+	 * tried, so the test is skipped as a panic.
 	 */
 	colocation_coexec_run(3, "incumbent saw the wrong pid");
 }
@@ -1638,10 +1637,7 @@ CHERIBSDTEST(colocation_one_callee_at_a_time,
     "Check that two callers on different CPUs never run one callee's code at "
     "once",
     .ct_child_func = colocation_one_callee_at_a_time_dispatch,
-    .ct_check_skip = skip_one_cpu_or_known_panic,
-    .ct_xfail_reason =
-	"The cocall switcher's lock is not atomic, so two cocalls can enter "
-	"one callee at once")
+    .ct_check_skip = skip_one_cpu_or_known_panic)
 {
 	/*
 	 * XXX: a failing run does not kill B or the caller that B did not

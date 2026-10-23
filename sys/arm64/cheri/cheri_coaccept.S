@@ -123,7 +123,7 @@ SIGCODE(switcher_coaccept)
 	 */
 	gclen	x9, c8
 	cbnz	x9, 1f
-	str	czr, SCB_CALLER_SCB(c29)
+	stlr	czr, SCB_CALLER_SCB(c29)
 	mov	x8, SYS_copark
 	svc	#0
 
@@ -218,9 +218,11 @@ copy_loop:
 
 	/*
 	 * Zero out the scb_peer_scb variables, releasing the spinlock.
+	 * The store-release orders the callee's saved context above before
+	 * the next caller's load-acquire.
 	 */
 	str	czr, SCB_CALLEE_SCB(c8)
-	str	czr, SCB_CALLER_SCB(c29)
+	stlr	czr, SCB_CALLER_SCB(c29)
 
 	/*
 	 * Return success; clear the carry flag.

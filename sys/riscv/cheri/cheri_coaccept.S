@@ -93,6 +93,7 @@ SIGCODE(switcher_coaccept)
 	 */
 	cgetlen	t1, caller
 	bnez	t1, 1f
+	fence	rw, w
 	csc	cnull, SCB_CALLER_SCB(callee)
 	li	t0, SYS_copark
 	ecall
@@ -157,8 +158,11 @@ SIGCODE(switcher_coaccept)
 
 	/*
 	 * Zero out the scb_peer_scb variables, releasing the spinlock.
+	 * The fence orders the callee's saved context above before the
+	 * next caller's acquire.
 	 */
 	csc	cnull, SCB_CALLEE_SCB(caller)
+	fence	rw, w
 	csc	cnull, SCB_CALLER_SCB(callee)
 
 	li	t0, 0
