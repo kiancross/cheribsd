@@ -153,7 +153,6 @@ CHERIBSDTEST(colocation_coexec_child,
 	}
 }
 
-#ifndef CHERIBSD_C18N_TESTS
 static void
 allowed_cpus(cpuset_t *mask)
 {
@@ -183,7 +182,88 @@ skip_without_parallel_cpus(const struct cheri_test *ctp __unused)
 
 	return (NULL);
 }
-#endif
+
+#define	CONCURRENT_COEXECVE_CHILDREN	3
+
+/*
+ * In 20 runs on a 4-CPU Morello board, the test failed after three rounds on
+ * average, and after 11 at most.  The test runs at least 14 times the average
+ * and twice the maximum, so that it misses the race in fewer than one run in a
+ * million.
+ */
+#define	CONCURRENT_COEXECVE_ROUNDS	50
+
+/*
+ * The property is settled inside coexecve(2), before any of the child's code
+ * runs, so the child function only exits.
+ */
+static void
+concurrent_coexecve_child(void)
+{
+	exit(0);
+}
+
+/*
+ * Each round forks CONCURRENT_COEXECVE_CHILDREN children, which coexecve(2)
+ * into this process at the same time, and waits for them all.
+ *
+ * Property under test: every coexecve succeeds, so every child exits with
+ * status 0.
+ */
+CHERIBSDTEST(colocation_concurrent_coexecve,
+    "Check that several processes can coexecve(2) into one vmspace at the "
+    "same time",
+    .ct_flags = CT_FLAG_SLOW,
+    .ct_child_func = concurrent_coexecve_child,
+    .ct_check_skip = skip_without_parallel_cpus,
+    .ct_xfail_reason =
+	"Concurrent coexecve(2) calls can choose the same stack space, and so "
+	"the one that maps second dies with SIGABRT")
+{
+	char release_bytes[CONCURRENT_COEXECVE_CHILDREN] = { 0 };
+	int release_pipe[2];
+	int i, round, status;
+	char byte;
+	pid_t pid;
+
+	if (pipe(release_pipe) != 0)
+		cheribsdtest_failure_err("pipe");
+
+	for (round = 1; round <= CONCURRENT_COEXECVE_ROUNDS; round++) {
+		for (i = 0; i < CONCURRENT_COEXECVE_CHILDREN; i++) {
+			pid = fork();
+			if (pid == -1)
+				cheribsdtest_failure_err("fork");
+
+			if (pid == 0) {
+				if (read(release_pipe[0], &byte, 1) != 1)
+					err(EX_OSERR, "read");
+
+				cheribsdtest_coexec_child();
+			}
+		}
+
+		/*
+		 * One write wakes all the children waiting in read(), so that
+		 * their coexecve(2) calls overlap.
+		 */
+		if (write(release_pipe[1], release_bytes,
+		    sizeof(release_bytes)) != sizeof(release_bytes))
+			cheribsdtest_failure_err("write");
+
+		for (i = 0; i < CONCURRENT_COEXECVE_CHILDREN; i++) {
+			if (wait(&status) == -1)
+				cheribsdtest_failure_err("wait");
+
+			CHERIBSDTEST_VERIFY2(WIFEXITED(status) &&
+			    WEXITSTATUS(status) == 0,
+			    "a child ended with status 0x%x in round %d",
+			    status, round);
+		}
+	}
+
+	cheribsdtest_success();
+}
 
 /*
  * colocation_coaccept_slow - test runner, forks and
