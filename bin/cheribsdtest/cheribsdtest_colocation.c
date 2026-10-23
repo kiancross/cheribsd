@@ -39,6 +39,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/cpuset.h>
 #include <sys/procdesc.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
@@ -1465,6 +1466,180 @@ CHERIBSDTEST(colocation_signal_while_hosted,
 	 * panic the kernel.
 	 */
 	colocation_coexec_run(2, "signal not delivered to hosted code");
+}
+
+#define	COLOCATION_ONE_CALLEE_SERVICE	"colocation_one_callee_at_a_time"
+
+#define	ONE_CALLEE_ROUNDS		1000000
+
+/*
+ * Long enough that, when two cocalls enter B together, the second enters B's
+ * code before the first leaves it, so one of the two sees the other.
+ */
+#define	ONE_CALLEE_SERVICE_ITERATIONS	1000UL
+
+/* In B's memory.  B hands the callers a pointer to it in every reply. */
+struct one_callee_state {
+	atomic_int	in_flight;	/* cocalls in B's code */
+	atomic_bool	overlap_seen;
+	atomic_int	caller_count;
+	atomic_int	arrivals;	/* calls to wait_for_other_caller() */
+};
+
+static void
+allowed_cpus(cpuset_t *mask)
+{
+	if (cpuset_getaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, -1,
+	    sizeof(*mask), mask) != 0)
+		err(EX_OSERR, "cpuset_getaffinity");
+}
+
+static const char *
+skip_one_cpu_or_known_panic(const struct cheri_test *ctp)
+{
+	cpuset_t mask;
+
+	allowed_cpus(&mask);
+	if (CPU_COUNT(&mask) < 2)
+		return ("Needs two CPUs");
+
+	return (skip_known_panic(ctp));
+}
+
+/* Callers 0 and 1 take the first and second CPUs they may run on. */
+static void
+pin_caller_to_cpu(int caller_index)
+{
+	cpuset_t mask;
+	int cpu, n;
+
+	allowed_cpus(&mask);
+
+	n = 0;
+	CPU_FOREACH_ISSET(cpu, &mask) {
+		if (n++ == caller_index)
+			break;
+	}
+
+	CPU_SETOF(cpu, &mask);
+	if (cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_PID, -1,
+	    sizeof(mask), &mask) != 0)
+		err(EX_OSERR, "cpuset_setaffinity");
+}
+
+static void __dead2
+one_callee_worker(void)
+{
+	static struct one_callee_state state;
+
+	struct one_callee_state *msg;
+	int already_in_flight;
+
+	for (;;) {
+		msg = &state;
+		if (coaccept(NULL, &msg, sizeof(msg), &msg, sizeof(msg)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		/*
+		 * No syscall until the reply, because a syscall would move B's
+		 * code back to TB.
+		 */
+		already_in_flight = atomic_fetch_add(&state.in_flight, 1);
+		burn_cpu(ONE_CALLEE_SERVICE_ITERATIONS);
+		if (already_in_flight != 0 ||
+		    atomic_load(&state.in_flight) != 1)
+			atomic_store(&state.overlap_seen, true);
+
+		atomic_fetch_sub(&state.in_flight, 1);
+	}
+}
+
+/*
+ * Waits until the other caller reaches this round too, so that the two
+ * callers' cocalls reach B's lock at about the same time.  Fails the test
+ * once B has seen two cocalls at once.  When that happens, B replies to only
+ * one of the two callers, so the other caller's code never runs again.
+ */
+static void
+wait_for_other_caller(struct one_callee_state *state, int round)
+{
+	atomic_fetch_add(&state->arrivals, 1);
+
+	while (atomic_load(&state->arrivals) < 2 * round &&
+	    !atomic_load(&state->overlap_seen))
+		;
+
+	/* The overlap was in the cocalls of the round before this one. */
+	if (atomic_load(&state->overlap_seen))
+		errx(EX_SOFTWARE, "two cocalls in B's code at once in round %d",
+		    round - 1);
+}
+
+static void
+colocation_one_callee_at_a_time_dispatch(void)
+{
+	struct one_callee_state *state;
+	void *target;
+	int caller_index, round;
+
+	if (coregister_wins(COLOCATION_ONE_CALLEE_SERVICE))
+		one_callee_worker();	/* callee B */
+
+	target = child_wait_for_service(COLOCATION_ONE_CALLEE_SERVICE);
+
+	state = NULL;
+	if (cocall(target, &state, sizeof(state), &state, sizeof(state)) < 0)
+		err(EX_OSERR, "cocall");
+
+	caller_index = atomic_fetch_add(&state->caller_count, 1);
+	pin_caller_to_cpu(caller_index);
+
+	for (round = 1; round <= ONE_CALLEE_ROUNDS; round++) {
+		wait_for_other_caller(state, round);
+
+		if (cocall(target, &state, sizeof(state), &state,
+		    sizeof(state)) < 0)
+			err(EX_OSERR, "cocall");
+	}
+
+	/*
+	 * Wait until both callers have finished their last cocall, so that no
+	 * cocall is in B's code when caller 0 exits with the verdict and the
+	 * test kills B.
+	 */
+	wait_for_other_caller(state, ONE_CALLEE_ROUNDS + 1);
+
+	if (caller_index == 0)
+		exit(0);
+
+	release_then_hold_thread(NULL);
+}
+
+/*
+ * Three colocated processes share one vmspace: B is the callee (the coregister
+ * winner), and A and C are callers on different CPUs, with kernel threads TA,
+ * TB, and TC.  A and C each cocall B many times, and start each round
+ * together.  B's code checks, without a syscall, that no other cocall is in it.
+ *
+ * Property under test: B's code runs for one cocall at a time.
+ */
+CHERIBSDTEST(colocation_one_callee_at_a_time,
+    "Check that two callers on different CPUs never run one callee's code at "
+    "once",
+    .ct_child_func = colocation_one_callee_at_a_time_dispatch,
+    .ct_check_skip = skip_one_cpu_or_known_panic,
+    .ct_xfail_reason =
+	"The cocall switcher's lock is not atomic, so two cocalls can enter "
+	"one callee at once")
+{
+	/*
+	 * XXX: if two copies of B's code reply at once, both restore the same
+	 * caller, whose code then runs on two threads, and the kernel may
+	 * panic before the test reports a verdict.  A failing run does not
+	 * kill B or the caller that B did not reply to.  That caller's code
+	 * never runs again, and its thread may be left in B's code.
+	 */
+	colocation_coexec_run(3, "two cocalls ran the callee at once");
 }
 
 #endif /* !CHERIBSD_C18N_TESTS */
