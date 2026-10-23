@@ -580,6 +580,104 @@ CHERIBSDTEST(colocation_single_client_unborrow,
 	}
 }
 
+#define	COLOCATION_CALLEE_EXIT_SERVICE	"colocation_callee_exit"
+
+/*
+ * If A exits in B's place, cheribsdtest reports this status as the failure.
+ * A status of 0 or EX_SOFTWARE would instead look like a test that set no
+ * result, which cheribsdtest treats as its own error.
+ */
+#define	COLOCATION_CALLEE_EXIT_STATUS	3
+
+static void
+colocation_callee_exit_worker(void)
+{
+	intcap_t buf = 0;
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup");
+
+	if (coregister(COLOCATION_CALLEE_EXIT_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	/*
+	 * Not exit(3), which can make other syscalls first, such as a write
+	 * to flush stdio.  The first of them would move B's code back to TB,
+	 * so B would not exit while hosted.
+	 */
+	_exit(COLOCATION_CALLEE_EXIT_STATUS);
+}
+
+/*
+ *	A>B	=> {TA->B, (A)}
+ *	B exits	|= {TA->A}
+ *
+ * Property under test: when B exits while hosted on TA, A's cocall fails with
+ * ENOLINK, A's next syscall runs as A, and B exits with the status it passed
+ * to _exit(2).
+ */
+CHERIBSDTEST(colocation_callee_exit_while_hosted,
+    "Check that a caller gets ENOLINK from its cocall when its callee exits "
+    "while hosted",
+    .ct_child_func = colocation_callee_exit_worker,
+    .ct_xfail_reason =
+	"When a hosted callee exits, nothing wakes its caller's thread, which "
+	"is left parked in copark(2)")
+{
+	void *target;
+	intcap_t buf = 0;
+	ssize_t received;
+	pid_t pid, my_pid, observed_pid;
+	int status;
+
+	my_pid = getpid();
+
+	pid = fork();
+	if (pid == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (pid == 0) {
+		cheribsdtest_coexec_child();
+	} else {
+		target = wait_for_service(COLOCATION_CALLEE_EXIT_SERVICE, pid);
+
+		/*
+		 * If the cocall never returns, SIGALRM ends the test, and
+		 * cheribsdtest reports the signal.
+		 */
+		alarm(5);
+
+		received = cocall(target, &buf, sizeof(buf), &buf, sizeof(buf));
+
+		CHERIBSDTEST_VERIFY2(received == -1 && errno == ENOLINK,
+		    "cocall returned %zd with errno %d, expected ENOLINK",
+		    received, errno);
+
+		/* A's first syscall after the cocall. */
+		observed_pid = getpid();
+
+		CHERIBSDTEST_VERIFY2(observed_pid == my_pid,
+		    "getpid() returned %d, expected %d", observed_pid, my_pid);
+
+		/*
+		 * Leave B unreaped: the atexit handler from wait_for_service()
+		 * kills B's pid, which could be reused once B is reaped.
+		 */
+		if (waitpid(pid, &status, WNOWAIT) != pid)
+			cheribsdtest_failure_err("waitpid");
+
+		CHERIBSDTEST_VERIFY2(WIFEXITED(status) &&
+		    WEXITSTATUS(status) == COLOCATION_CALLEE_EXIT_STATUS,
+		    "callee status 0x%x, expected exit status %d", status,
+		    COLOCATION_CALLEE_EXIT_STATUS);
+
+		cheribsdtest_success();
+	}
+}
+
 /*
  * A test that panics or hangs the kernel stops the whole run, so these tests
  * are skipped unless CHERIBSDTEST_RUN_PANICS is set.
