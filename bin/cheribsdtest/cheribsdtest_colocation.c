@@ -133,7 +133,7 @@ CHERIBSDTEST(colocation_coexec_child,
 
 /*
  * colocation_coaccept_slow - test runner, forks and
- * coexecs a child, and then spins waiting for the child to register
+ * coexecs a child, and then waits for the child to register
  * a service. Once it has done so, it cocall's into the service.
  * The child registers a service and calls coaccept, does some
  * validation, and then calls coaccept again to return to the caller.
@@ -224,14 +224,9 @@ CHERIBSDTEST(colocation_coaccept_slow,
 		if (error != 0)
 			err(EX_OSERR, "cosetup");
 
-		/*
-		 * We need to wait for the child to coregister. Right
-		 * now the best we can do is spin unless we use a pipe/socket
-		 * to synchronize.
-		 */
 		while ((error = colookup(/* ctp->ct_name */ "XXX", &target)) != 0 &&
 		    errno == ESRCH && waitpid(fork_pid, &res, WNOHANG) == 0)
-			;
+			usleep(1000);
 		if (error != 0)
 			cheribsdtest_failure_err("colookup");
 
@@ -242,7 +237,7 @@ CHERIBSDTEST(colocation_coaccept_slow,
 		 */
 		while ((error = cocall_slow(target, &my_pid, sizeof(my_pid),
 		    &recvd_pid, sizeof(recvd_pid))) < 0 && errno == EAGAIN)
-			;
+			usleep(1000);
 		if (error < 0)
 			cheribsdtest_failure_err("cocall");
 
