@@ -1434,6 +1434,21 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 	return (sv->sv_onexec != NULL ? sv->sv_onexec(p, imgp) : 0);
 }
 
+#if __has_feature(capabilities)
+/*
+ * CheriABI maps a separate space for strings outside the stack.  We
+ * currently place it just below the stack as this avoids collisions with
+ * init which is linked near the bottom of the address space.
+ */
+static vm_pointer_t
+exec_strings_addr(vm_pointer_t stack_addr, size_t strings_size)
+{
+
+	return (CHERI_REPRESENTABLE_ALIGN_DOWN(stack_addr - strings_size,
+	    strings_size));
+}
+#endif
+
 /*
  * Compute the stack size limit and map the main process stack.
  * Map the shared page.
@@ -1486,6 +1501,15 @@ exec_map_stack(struct image_params *imgp)
 		 * administrator-configured stack size limit.
 		 */
 		ssiz = CHERI_REPRESENTABLE_LENGTH(ssiz);
+
+		/*
+		 * The extra page beyond ARG_MAX accounts for space
+		 * needed for the ELF auxiliary, argument, and
+		 * environment vectors and other data stored in the
+		 * strings region other than argument and environment
+		 * strings.
+		 */
+		strings_size = CHERI_REPRESENTABLE_LENGTH(ARG_MAX + PAGE_SIZE);
 	}
 #endif
 
@@ -1495,7 +1519,7 @@ exec_map_stack(struct image_params *imgp)
 	stack_prot = sv->sv_shared_page_obj != NULL && imgp->stack_prot != 0 ?
 	    imgp->stack_prot : sv->sv_stackprot;
 	if (imgp->cop != NULL) {
-		vm_offset_t free_addr;
+		bool slot_free;
 
 		/*
 		 * XXX: Using linear search here is rather silly.
@@ -1521,14 +1545,24 @@ exec_map_stack(struct image_params *imgp)
 			}
 
 			/*
-			 * vm_map_findspace() returns the lowest free address at
-			 * or above stack_addr, so it returns stack_addr only if
-			 * the stack's whole range is free.
+			 * The stack and the strings region below it must both
+			 * be free.  vm_map_findspace() returns the lowest free
+			 * address at or above the address it is passed, so each
+			 * check below holds only if its whole range is free.
 			 */
 			vm_map_lock(map);
-			free_addr = vm_map_findspace(map, stack_addr, ssiz);
+			slot_free = vm_map_findspace(map, stack_addr, ssiz) ==
+			    stack_addr;
+#if __has_feature(capabilities)
+			if (slot_free && (sv->sv_flags & SV_CHERI)) {
+				strings_addr = exec_strings_addr(stack_addr,
+				    strings_size);
+				slot_free = vm_map_findspace(map, strings_addr,
+				    strings_size) == strings_addr;
+			}
+#endif
 			vm_map_unlock(map);
-		} while (free_addr != stack_addr);
+		} while (!slot_free);
 		/*
 		 * XXX: We don't really care where this ends up, but
 		 * there's little point in trying to look elsewere given
@@ -1586,21 +1620,7 @@ exec_map_stack(struct image_params *imgp)
 #endif
 
 	if (sv->sv_flags & SV_CHERI) {
-		/*
-		 * Map a seperate space for strings outside the stack.
-		 * We currently place it just just below the stack as
-		 * this avoides collisions with init which is linked
-		 * near the bottom of the address space.
-		 *
-		 * The extra page beyond ARG_MAX accounts for space
-		 * needed for the ELF auxiliary, argument, and
-		 * environment vectors and other data stored in this
-		 * space other than argument and environment strings.
-		 */
-		strings_size = CHERI_REPRESENTABLE_LENGTH(ARG_MAX + PAGE_SIZE);
-		strings_addr =
-		    CHERI_REPRESENTABLE_ALIGN_DOWN(stack_addr - strings_size,
-			strings_size);
+		strings_addr = exec_strings_addr(stack_addr, strings_size);
 		error = vm_mmap_object(map, &strings_addr, 0, strings_size,
 		    VM_PROT_RW_CAP, VM_PROT_RW_CAP, MAP_ANON | MAP_FIXED |
 		    MAP_RESERVATION_CREATE, NULL, 0, FALSE, curthread);
