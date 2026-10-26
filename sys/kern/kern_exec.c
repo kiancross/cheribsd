@@ -1495,7 +1495,7 @@ exec_map_stack(struct image_params *imgp)
 	stack_prot = sv->sv_shared_page_obj != NULL && imgp->stack_prot != 0 ?
 	    imgp->stack_prot : sv->sv_stackprot;
 	if (imgp->cop != NULL) {
-		vm_offset_t dummy;
+		vm_offset_t free_addr;
 
 		/*
 		 * XXX: Using linear search here is rather silly.
@@ -1506,7 +1506,8 @@ exec_map_stack(struct image_params *imgp)
 		do {
 			p->p_vm_stacktop -= MAXSSIZ;
 #if __has_feature(capabilities)
-			p->p_vm_stacktop = CHERI_REPRESENTABLE_ALIGN_DOWN(p->p_vm_stacktop, ssiz);
+			p->p_vm_stacktop = CHERI_REPRESENTABLE_ALIGN_DOWN(
+			    p->p_vm_stacktop, ssiz);
 #endif
 			stack_addr = p->p_vm_stacktop - ssiz;
 			if (stack_addr < VM_MINUSER_ADDRESS ||
@@ -1518,10 +1519,16 @@ exec_map_stack(struct image_params *imgp)
 #endif
 				return (ENOMEM);
 			}
+
+			/*
+			 * vm_map_findspace() returns the lowest free address at
+			 * or above stack_addr, so it returns stack_addr only if
+			 * the stack's whole range is free.
+			 */
 			vm_map_lock(map);
-			dummy = vm_map_findspace(map, stack_addr, ssiz);
+			free_addr = vm_map_findspace(map, stack_addr, ssiz);
 			vm_map_unlock(map);
-		} while (dummy == vm_map_max(map) - ssiz + 1);
+		} while (free_addr != stack_addr);
 		/*
 		 * XXX: We don't really care where this ends up, but
 		 * there's little point in trying to look elsewere given
