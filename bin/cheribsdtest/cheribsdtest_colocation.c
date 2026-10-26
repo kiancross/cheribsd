@@ -281,10 +281,7 @@ CHERIBSDTEST(colocation_concurrent_coexecve,
  */
 CHERIBSDTEST(colocation_coexecve_small_stack,
     "Check that repeated coexecve(2)s of a program with a small stack all "
-    "succeed",
-    .ct_xfail_reason =
-	"coexecve(2) can choose a stack range that is partly in use for a small "
-	"stack, and so the child dies with SIGABRT")
+    "succeed")
 {
 	char *child_argv[] = { __DECONST(char *, SMALL_STACK_PROGRAM), NULL };
 	int i, status;
