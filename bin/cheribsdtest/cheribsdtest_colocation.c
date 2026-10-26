@@ -265,6 +265,53 @@ CHERIBSDTEST(colocation_concurrent_coexecve,
 	cheribsdtest_success();
 }
 
+/* small-stack, the helper, is built only for a purecap world's own ABI. */
+#if defined(__CHERI_PURE_CAPABILITY__) && !defined(COMPAT_LIBCOMPAT)
+#define	SMALL_STACK_PROGRAM		"/bin/cheribsdtest-small-stack"
+#define	SMALL_STACK_CHILDREN		20
+
+/*
+ * The program's PT_GNU_STACK asks for a 1 MiB stack, far smaller than the
+ * MAXSSIZ slots that coexecve(2) places stacks in.  Each child's stack range
+ * stays reserved in the shared vmspace after the child exits, so every later
+ * child must skip the ranges of the children before it.
+ *
+ * Property under test: every coexecve succeeds, so every child exits with
+ * status 0.
+ */
+CHERIBSDTEST(colocation_coexecve_small_stack,
+    "Check that repeated coexecve(2)s of a program with a small stack all "
+    "succeed",
+    .ct_xfail_reason =
+	"coexecve(2) can choose a stack range that is partly in use for a small "
+	"stack, and so the child dies with SIGABRT")
+{
+	char *child_argv[] = { __DECONST(char *, SMALL_STACK_PROGRAM), NULL };
+	int i, status;
+	pid_t pid;
+
+	for (i = 1; i <= SMALL_STACK_CHILDREN; i++) {
+		pid = fork();
+		if (pid == -1)
+			cheribsdtest_failure_err("fork");
+
+		if (pid == 0) {
+			coexecve(getppid(), SMALL_STACK_PROGRAM, child_argv, NULL);
+			err(EX_OSERR, "coexecve");
+		}
+
+		if (waitpid(pid, &status, 0) == -1)
+			cheribsdtest_failure_err("waitpid");
+
+		CHERIBSDTEST_VERIFY2(WIFEXITED(status) &&
+		    WEXITSTATUS(status) == 0,
+		    "child %d ended with status 0x%x", i, status);
+	}
+
+	cheribsdtest_success();
+}
+#endif
+
 /*
  * colocation_coaccept_slow - test runner, forks and
  * coexecs a child, and then waits for the child to register

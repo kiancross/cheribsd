@@ -18,6 +18,10 @@ SUBDIR+=	mt-c18n
 .endif
 .endif
 
+.if ${MACHINE_ABI:Mpurecap}
+SUBDIR+=	small-stack
+.endif
+
 .if (${MACHINE_ABI:Mpurecap} && ${MACHINE_ABI:Mbenchmark}) || ${MK_LIB64CB} == "yes"
 SUBDIR+=	purecap-benchmark \
 		purecap-benchmark-dynamic \
