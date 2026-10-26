@@ -1518,6 +1518,13 @@ exec_map_stack(struct image_params *imgp)
 
 	stack_prot = sv->sv_shared_page_obj != NULL && imgp->stack_prot != 0 ?
 	    imgp->stack_prot : sv->sv_stackprot;
+
+	/*
+	 * Hold the map lock until the stack and its strings region are both
+	 * mapped, so that two coexecve(2) calls into one vmspace at the same
+	 * time cannot choose the same slot.
+	 */
+	vm_map_lock(map);
 	if (imgp->cop != NULL) {
 		bool slot_free;
 
@@ -1541,6 +1548,7 @@ exec_map_stack(struct image_params *imgp)
 				    "not enough free virtual address space\n",
 				    __func__);
 #endif
+				vm_map_unlock(map);
 				return (ENOMEM);
 			}
 
@@ -1550,7 +1558,6 @@ exec_map_stack(struct image_params *imgp)
 			 * address at or above the address it is passed, so each
 			 * check below holds only if its whole range is free.
 			 */
-			vm_map_lock(map);
 			slot_free = vm_map_findspace(map, stack_addr, ssiz) ==
 			    stack_addr;
 #if __has_feature(capabilities)
@@ -1561,7 +1568,6 @@ exec_map_stack(struct image_params *imgp)
 				    strings_size) == strings_addr;
 			}
 #endif
-			vm_map_unlock(map);
 		} while (!slot_free);
 		/*
 		 * XXX: We don't really care where this ends up, but
@@ -1587,15 +1593,27 @@ exec_map_stack(struct image_params *imgp)
 		find_space = VMFS_NO_SPACE;
 	}
 
-	error = vm_map_find(map, NULL, 0, &stack_addr, (vm_size_t)ssiz,
+	error = vm_map_find_locked(map, NULL, 0, &stack_addr, (vm_size_t)ssiz,
 	    sv->sv_usrstack, find_space, stack_prot, stack_prot,
 	    MAP_STACK_GROWS_DOWN);
 	if (error != KERN_SUCCESS) {
+		vm_map_unlock(map);
 		uprintf("exec_new_vmspace: mapping stack size %#jx prot %#x "
 		    "failed, mach error %d errno %d\n", (uintmax_t)ssiz,
 		    stack_prot, error, vm_mmap_to_errno(error));
 		return (vm_mmap_to_errno(error));
 	}
+#if __has_feature(capabilities)
+	if (imgp->cop != NULL && (sv->sv_flags & SV_CHERI)) {
+		strings_addr = exec_strings_addr(stack_addr, strings_size);
+		error = vm_map_find_locked(map, NULL, 0, &strings_addr,
+		    strings_size, 0, VMFS_NO_SPACE, VM_PROT_RW_CAP,
+		    VM_PROT_RW_CAP, 0);
+	}
+#endif
+	vm_map_unlock(map);
+	if (error != KERN_SUCCESS)
+		return (vm_mmap_to_errno(error));
 
 	imgp->stack_sz = ssiz;
 	stack_top = stack_addr + ssiz;
@@ -1619,13 +1637,16 @@ exec_map_stack(struct image_params *imgp)
 		    stack_addr, ssiz, stack_top - stack_addr);
 #endif
 
-	if (sv->sv_flags & SV_CHERI) {
+	if (imgp->cop == NULL && (sv->sv_flags & SV_CHERI)) {
 		strings_addr = exec_strings_addr(stack_addr, strings_size);
 		error = vm_mmap_object(map, &strings_addr, 0, strings_size,
 		    VM_PROT_RW_CAP, VM_PROT_RW_CAP, MAP_ANON | MAP_FIXED |
 		    MAP_RESERVATION_CREATE, NULL, 0, FALSE, curthread);
 		if (error != KERN_SUCCESS)
 			return (vm_mmap_to_errno(error));
+	}
+
+	if (sv->sv_flags & SV_CHERI) {
 #ifdef __CHERI_PURE_CAPABILITY__
 		imgp->strings = (void *)strings_addr;
 #else
