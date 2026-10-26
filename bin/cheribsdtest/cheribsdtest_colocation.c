@@ -215,10 +215,7 @@ CHERIBSDTEST(colocation_concurrent_coexecve,
     "same time",
     .ct_flags = CT_FLAG_SLOW,
     .ct_child_func = concurrent_coexecve_child,
-    .ct_check_skip = skip_without_parallel_cpus,
-    .ct_xfail_reason =
-	"Concurrent coexecve(2) calls can choose the same stack space, and so "
-	"the one that maps second dies with SIGABRT")
+    .ct_check_skip = skip_without_parallel_cpus)
 {
 	char release_bytes[CONCURRENT_COEXECVE_CHILDREN] = { 0 };
 	int release_pipe[2];
