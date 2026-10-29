@@ -130,16 +130,16 @@ colocation_cleanup(struct thread *td)
 }
 
 static void
-colocation_copyin_scb(const struct switchercb * __capability cap,
+colocation_copyin_scb(const struct switchercb * __capability scbcap,
     struct switchercb *scbp)
 {
 	int error __diagused;
 
-	KASSERT(cap != NULL, ("%s: NULL addr", __func__));
+	KASSERT(scbcap != NULL, ("%s: NULL addr", __func__));
 
-	error = copyincap(cap, scbp, sizeof(*scbp));
+	error = copyincap(scbcap, scbp, sizeof(*scbp));
 	KASSERT(error == 0, ("%s: copyincap from %#lp failed with error %d\n",
-	    __func__, cap, error));
+	    __func__, scbcap, error));
 }
 
 static bool
@@ -158,15 +158,16 @@ colocation_fetch_scb(struct thread *td, struct switchercb *scbp)
 }
 
 static void
-colocation_copyout_scb(void * __capability cap, const struct switchercb *scbp)
+colocation_copyout_scb(void * __capability scbcap,
+    const struct switchercb *scbp)
 {
 	int error __diagused;
 
-	KASSERT(cap != NULL, ("%s: NULL addr", __func__));
+	KASSERT(scbcap != NULL, ("%s: NULL addr", __func__));
 
-	error = copyoutcap(scbp, cap, sizeof(*scbp));
+	error = copyoutcap(scbp, scbcap, sizeof(*scbp));
 	KASSERT(error == 0, ("%s: copyoutcap to %#lp failed with error %d",
-	    __func__, cap, error));
+	    __func__, scbcap, error));
 }
 
 static void
@@ -177,14 +178,14 @@ colocation_store_scb(struct thread *td, struct switchercb *scbp)
 }
 
 static void
-colocation_store_caller_scb(struct switchercb * __capability user_scbp,
-    struct switchercb * __capability caller_scb)
+colocation_store_caller_scb(struct switchercb * __capability targetcap,
+    struct switchercb * __capability callercap)
 {
 	int error __diagused;
 
-	error = sucap(&user_scbp->scb_caller_scb, (intcap_t)caller_scb);
+	error = sucap(&targetcap->scb_caller_scb, (intcap_t)callercap);
 	KASSERT(error == 0, ("%s: sucap to %#lp failed with error %d",
-	    __func__, user_scbp, error));
+	    __func__, targetcap, error));
 }
 
 static bool
@@ -243,11 +244,11 @@ colocation_fetch_callee_scb(struct thread *td, struct switchercb *scbp)
 }
 
 static void
-wakeupcap(const void * __capability target, const char *who)
+wakeupcap(const void * __capability scbcap, const char *who)
 {
 	const void *chan;
 
-	chan = (__cheri_fromcap const void *)target;
+	chan = (__cheri_fromcap const void *)scbcap;
 	COLOCATION_DEBUG("waking up %s scb %p", who, chan);
 	wakeup(chan);
 }
@@ -294,7 +295,7 @@ colocation_thread_exit(struct thread *td)
 {
 	struct vmspace *vmspace;
 	struct coname *con, *con_temp;
-	void * __capability scb_cap;
+	void * __capability target;
 	struct switchercb scb;
 	bool have_scb;
 
@@ -303,14 +304,14 @@ colocation_thread_exit(struct thread *td)
 		return;
 
 	if (counregister_on_exit) {
-		scb_cap = cheri_seal(td->td_scb, switcher_sealcap2);
+		target = cheri_seal(td->td_scb, switcher_sealcap2);
 
 		vmspace = td->td_proc->p_vmspace;
 
 		vm_map_lock(&vmspace->vm_map);
 
 		LIST_FOREACH_SAFE(con, &vmspace->vm_conames, c_next, con_temp) {
-			if (con->c_value == scb_cap) {
+			if (con->c_value == target) {
 				LIST_REMOVE(con, c_next);
 				free(con, M_TEMP);
 			}
@@ -694,7 +695,7 @@ kern_coregister(struct thread *td, const char * __capability namep,
 	struct vmspace *vmspace;
 	struct coname *con;
 	char name[PATH_MAX];
-	void * __capability cap;
+	void * __capability target;
 	int error;
 
 	vmspace = td->td_proc->p_vmspace;
@@ -705,10 +706,10 @@ kern_coregister(struct thread *td, const char * __capability namep,
 			return (error);
 	}
 
-	cap = cheri_seal(td->td_scb, switcher_sealcap2);
+	target = cheri_seal(td->td_scb, switcher_sealcap2);
 
 	if (capp != NULL) {
-		error = sucap(capp, (intcap_t)cap) == 0 ? 0 : EFAULT;
+		error = sucap(capp, (intcap_t)target) == 0 ? 0 : EFAULT;
 		if (error != 0)
 			return (error);
 	}
@@ -734,7 +735,7 @@ kern_coregister(struct thread *td, const char * __capability namep,
 
 		con = malloc(sizeof(struct coname), M_TEMP, M_WAITOK);
 		con->c_name = strdup(name, M_TEMP);
-		con->c_value = cap;
+		con->c_value = target;
 		LIST_INSERT_HEAD(&vmspace->vm_conames, con, c_next);
 		vm_map_unlock(&vmspace->vm_map);
 	}
@@ -755,7 +756,7 @@ kern_colookup(struct thread *td, const char * __capability namep,
 {
 	struct vmspace *vmspace;
 	const struct coname *con;
-	intcap_t cap;
+	intcap_t target;
 	char name[PATH_MAX];
 	int error;
 
@@ -779,9 +780,9 @@ kern_colookup(struct thread *td, const char * __capability namep,
 		return (ESRCH);
 	}
 
-	cap = (intcap_t)con->c_value;
+	target = (intcap_t)con->c_value;
 	vm_map_unlock_read(&vmspace->vm_map);
-	error = sucap(capp, cap) == 0 ? 0 : EFAULT;
+	error = sucap(capp, target) == 0 ? 0 : EFAULT;
 	return (error);
 }
 
@@ -847,7 +848,7 @@ kern_cocall_slow(void * __capability target,
     void * __capability inbuf, size_t inlen)
 {
 	struct switchercb scb, calleescb;
-	struct switchercb * __capability targetscb;
+	struct switchercb * __capability targetcap;
 	struct thread *calleetd __diagused;
 	ssize_t received;
 	int error;
@@ -890,12 +891,12 @@ kern_cocall_slow(void * __capability target,
 		return (EINVAL);
 	}
 
-	targetscb = cheri_unseal(target, switcher_sealcap2);
+	targetcap = cheri_unseal(target, switcher_sealcap2);
 
 	SWITCHER_LOCK();
-	COLOCATION_DEBUG("starting with target %#lp", targetscb);
+	COLOCATION_DEBUG("starting with callee %#lp", targetcap);
 again:
-	colocation_copyin_scb(targetscb, &calleescb);
+	colocation_copyin_scb(targetcap, &calleescb);
 
 	/*
 	 * The protocol here is slightly different from the one used
@@ -907,7 +908,7 @@ again:
 	 */
 
 	if (cheri_gettag(calleescb.scb_caller_scb) == 0) {
-		COLOCATION_DEBUG("callee scb %#lp is waiting on switcher cocall", targetscb);
+		COLOCATION_DEBUG("callee scb %#lp is waiting on switcher cocall", targetcap);
 		SWITCHER_UNLOCK();
 		return (EPROTOTYPE);
 	}
@@ -916,8 +917,8 @@ again:
 		/*
 		 * Non-zero length means there's already a cocall in progress.
 		 */
-		COLOCATION_DEBUG("callee is busy, waiting on %lp", targetscb);
-		error = msleep((__cheri_fromcap const void *)targetscb,
+		COLOCATION_DEBUG("callee is busy, waiting on %lp", targetcap);
+		error = msleep((__cheri_fromcap const void *)targetcap,
 		    &switcher_lock, PCATCH, "cobusy", 0);
 		if (error != 0) {
 			COLOCATION_DEBUG("cobusy msleep failed with error %d",
@@ -938,9 +939,9 @@ again:
 		return (error);
 	}
 
-	colocation_store_caller_scb(targetscb, curthread->td_scb);
+	colocation_store_caller_scb(targetcap, curthread->td_scb);
 
-	scb.scb_callee_scb = targetscb;
+	scb.scb_callee_scb = targetcap;
 	scb.scb_outbuf = outbuf;
 	scb.scb_outlen = outlen;
 	scb.scb_inbuf = inbuf;
@@ -962,21 +963,21 @@ again:
 	 * return from coaccept_slow(2), call coaccept_slow(2) again,
 	 * and copy the buffer back.
 	 */
-	wakeupcap(targetscb, "callee");
-	COLOCATION_DEBUG("waiting on scb %lp", targetscb);
-	error = msleep((__cheri_fromcap const void *)targetscb,
+	wakeupcap(targetcap, "callee");
+	COLOCATION_DEBUG("waiting on scb %lp", targetcap);
+	error = msleep((__cheri_fromcap const void *)targetcap,
 	    &switcher_lock, PCATCH, "cocall", 0);
 	// XXX: Are we sure we are done once we wake up?
 	if (error != 0 && error != ERESTART) {
 		COLOCATION_DEBUG("msleep failed with error %d", error);
 	}
 
-	colocation_store_caller_scb(targetscb, errno_cap(EPROTOTYPE));
+	colocation_store_caller_scb(targetcap, errno_cap(EPROTOTYPE));
 
 	/*
 	 * Wake up other callers that might be waiting in kern_cocall_slow().
 	 */
-	wakeupcap(targetscb, "callers sleeping on callee");
+	wakeupcap(targetcap, "callers sleeping on callee");
 	SWITCHER_UNLOCK();
 
 	/*
@@ -1229,39 +1230,40 @@ sys_captofd(struct thread *td, struct captofd_args *uap)
 
 #ifdef DDB
 static void
-db_print_scb(struct thread *td, struct switchercb *scb)
+db_print_scb(struct thread *td, struct switchercb *scbp)
 {
 
-	if (cheri_getlen(scb->scb_caller_scb) == 0) {
+	if (cheri_getlen(scbp->scb_caller_scb) == 0) {
 		db_printf(       "    scb_caller_scb:    <errno %lu>\n",
-		    cheri_getoffset(scb->scb_caller_scb));
+		    cheri_getoffset(scbp->scb_caller_scb));
 	} else {
-		db_print_cap(td, "    scb_caller_scb:    ", scb->scb_caller_scb);
+		db_print_cap(td, "    scb_caller_scb:    ",
+		    scbp->scb_caller_scb);
 	}
-	db_print_cap(td, "    scb_callee_scb:    ", scb->scb_callee_scb);
-	db_print_cap(td, "    scb_home_td:       ", scb->scb_home_td);
-	db_print_cap(td, "    scb_borrower_td:   ", scb->scb_borrower_td);
-	db_print_cap(td, "    scb_unsealcap:     ", scb->scb_unsealcap);
-	db_print_cap(td, "    scb_csp:           ", scb->scb_csp);
-	db_print_cap(td, "    scb_cra:           ", scb->scb_cra);
-	db_print_cap(td, "    scb_cookiep (ca2): ", scb->scb_cookiep);
-	db_print_cap(td, "    scb_outbuf (ca3):  ", scb->scb_outbuf);
-	db_printf(       "    scb_outlen (a4):   %zd\n", scb->scb_outlen);
-	db_print_cap(td, "    scb_inbuf (ca5):   ", scb->scb_inbuf);
-	db_printf(       "    scb_inlen (a6):    %zd\n", scb->scb_inlen);
-	db_print_cap(td, "    scb_cookiep:       ", scb->scb_cookiep);
+	db_print_cap(td, "    scb_callee_scb:    ", scbp->scb_callee_scb);
+	db_print_cap(td, "    scb_home_td:       ", scbp->scb_home_td);
+	db_print_cap(td, "    scb_borrower_td:   ", scbp->scb_borrower_td);
+	db_print_cap(td, "    scb_unsealcap:     ", scbp->scb_unsealcap);
+	db_print_cap(td, "    scb_csp:           ", scbp->scb_csp);
+	db_print_cap(td, "    scb_cra:           ", scbp->scb_cra);
+	db_print_cap(td, "    scb_cookiep (ca2): ", scbp->scb_cookiep);
+	db_print_cap(td, "    scb_outbuf (ca3):  ", scbp->scb_outbuf);
+	db_printf(       "    scb_outlen (a4):   %zd\n", scbp->scb_outlen);
+	db_print_cap(td, "    scb_inbuf (ca5):   ", scbp->scb_inbuf);
+	db_printf(       "    scb_inlen (a6):    %zd\n", scbp->scb_inlen);
+	db_print_cap(td, "    scb_cookiep:       ", scbp->scb_cookiep);
 #ifdef __aarch64__
-	db_print_cap(td, "    scb_c19:           ", scb->scb_c19);
-	db_print_cap(td, "    scb_c20:           ", scb->scb_c20);
-	db_print_cap(td, "    scb_c21:           ", scb->scb_c21);
-	db_print_cap(td, "    scb_c22:           ", scb->scb_c22);
-	db_print_cap(td, "    scb_c23:           ", scb->scb_c23);
-	db_print_cap(td, "    scb_c24:           ", scb->scb_c24);
-	db_print_cap(td, "    scb_c25:           ", scb->scb_c25);
-	db_print_cap(td, "    scb_c26:           ", scb->scb_c26);
-	db_print_cap(td, "    scb_c27:           ", scb->scb_c27);
-	db_print_cap(td, "    scb_c28:           ", scb->scb_c28);
-	db_print_cap(td, "    scb_tls:           ", scb->scb_tls);
+	db_print_cap(td, "    scb_c19:           ", scbp->scb_c19);
+	db_print_cap(td, "    scb_c20:           ", scbp->scb_c20);
+	db_print_cap(td, "    scb_c21:           ", scbp->scb_c21);
+	db_print_cap(td, "    scb_c22:           ", scbp->scb_c22);
+	db_print_cap(td, "    scb_c23:           ", scbp->scb_c23);
+	db_print_cap(td, "    scb_c24:           ", scbp->scb_c24);
+	db_print_cap(td, "    scb_c25:           ", scbp->scb_c25);
+	db_print_cap(td, "    scb_c26:           ", scbp->scb_c26);
+	db_print_cap(td, "    scb_c27:           ", scbp->scb_c27);
+	db_print_cap(td, "    scb_c28:           ", scbp->scb_c28);
+	db_print_cap(td, "    scb_tls:           ", scbp->scb_tls);
 #endif
 }
 
