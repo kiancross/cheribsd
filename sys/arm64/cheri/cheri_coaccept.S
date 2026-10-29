@@ -146,7 +146,7 @@ SIGCODE(switcher_coaccept)
 	 */
 	ldr	x9, SCB_BORROWER_TD(c8)
 	cbnz	x9, 4f
-	ldr	c11, SCB_TD(c8)
+	ldr	c11, SCB_HOME_TD(c8)
 	str	c11, SCB_BORROWER_TD(c29)
 	b	5f
 4:

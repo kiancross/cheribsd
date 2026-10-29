@@ -116,7 +116,7 @@ SIGCODE(switcher_coaccept)
 	 */
 	clc	ct1, SCB_BORROWER_TD(caller)
 	bnez	t1, 4f
-	clc	ct3, SCB_TD(caller)
+	clc	ct3, SCB_HOME_TD(caller)
 	csc	ct3, SCB_BORROWER_TD(callee)
 	j	5f
 4:
