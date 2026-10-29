@@ -275,18 +275,18 @@ errno_cap(int error)
 }
 
 void
-colocation_get_peer(struct thread *td, struct thread **peertdp)
+colocation_guest_home(struct thread *td, struct thread **hometdp)
 {
 	struct switchercb scb;
 	bool have_scb;
 
 	have_scb = colocation_fetch_scb(td, &scb);
 	if (!have_scb) {
-		*peertdp = NULL;
+		*hometdp = NULL;
 		return;
 	}
 
-	*peertdp = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
+	*hometdp = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
 }
 
 void
@@ -350,16 +350,16 @@ void
 colocation_vacate(struct thread *td)
 {
 	struct switchercb scb;
-	struct thread *peertd;
-	struct trapframe peertrapframe;
+	struct thread *hometd;
+	struct trapframe hometrapframe;
 	bool have_scb;
 
 	have_scb = colocation_fetch_scb(td, &scb);
 	if (!have_scb)
 		return;
 
-	peertd = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
-	if (peertd == NULL) {
+	hometd = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
+	if (hometd == NULL) {
 		/*
 		 * Nothing borrowed yet.
 		 */
@@ -368,29 +368,29 @@ colocation_vacate(struct thread *td)
 
 #if   defined(__riscv)
 	KASSERT(td->td_frame->tf_t[0] != SYS_copark,
-	    ("%s: vacating for copark(); peer td_sa.code %ld; td %p, pid %d (%s); peer td %p, peer pid %d (%s)\n",
-	    __func__, (long)peertd->td_frame->tf_t[0],
+	    ("%s: vacating for copark(); home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
+	    __func__, (long)hometd->td_frame->tf_t[0],
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
-	    peertd, peertd->td_proc->p_pid, peertd->td_proc->p_comm));
+	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #elif defined(__aarch64__)
 	KASSERT(td->td_frame->tf_x[8] != SYS_copark,
-	    ("%s: vacating for copark(); peer td_sa.code %ld; td %p, pid %d (%s); peer td %p, peer pid %d (%s)\n",
-	    __func__, (long)peertd->td_frame->tf_x[8],
+	    ("%s: vacating for copark(); home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
+	    __func__, (long)hometd->td_frame->tf_x[8],
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
-	    peertd, peertd->td_proc->p_pid, peertd->td_proc->p_comm));
+	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #else
 #error "what architecture is this?"
 #endif
 
 	KASSERT(td == (__cheri_fromcap struct thread *)scb.scb_home_td,
 	    ("%s: td %p != scb_home_td %p\n", __func__, td, (__cheri_fromcap struct thread *)scb.scb_home_td));
-	KASSERT(peertd != td,
-	    ("%s: peertd %p == td %p\n", __func__, peertd, td));
+	KASSERT(hometd != td,
+	    ("%s: hometd %p == td %p\n", __func__, hometd, td));
 
 	COLOCATION_DEBUG("vacating td %p, pid %d (%s), switchercb %lp, "
 	    "to td %p, pid %d (%s), switchercb %lp",
 	    td, td->td_proc->p_pid, td->td_proc->p_comm, td->td_scb,
-	    peertd, peertd->td_proc->p_pid, peertd->td_proc->p_comm, peertd->td_scb);
+	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm, hometd->td_scb);
 
 #ifdef DDB
 	if (kdb_on_vacate)
@@ -409,16 +409,16 @@ colocation_vacate(struct thread *td)
 	WRITE_SPECIALREG_CAP(ctpidr_el0, scb.scb_tls);
 #endif
 
-	memcpy(&peertrapframe, peertd->td_frame, sizeof(struct trapframe));
-	memcpy(peertd->td_frame, td->td_frame, sizeof(struct trapframe));
-	memcpy(td->td_frame, &peertrapframe, sizeof(struct trapframe));
+	memcpy(&hometrapframe, hometd->td_frame, sizeof(struct trapframe));
+	memcpy(hometd->td_frame, td->td_frame, sizeof(struct trapframe));
+	memcpy(td->td_frame, &hometrapframe, sizeof(struct trapframe));
 
 	/*
 	 * Wake up the other thread, which should return with ERESTART,
 	 * refetch its args from the updated trapframe, and then execute
 	 * whatever syscall we've just entered.
 	 */
-	wakeup(&peertd->td_scb);
+	wakeup(&hometd->td_scb);
 
 	/*
 	 * Continue as usual, but calling copark(2) instead of whatever
@@ -427,16 +427,16 @@ colocation_vacate(struct thread *td)
 	 */
 #if   defined(__riscv)
 	KASSERT(td->td_frame->tf_t[0] == SYS_copark,
-	    ("%s: td_sa.code %ld != SYS_copark %d; peer td_sa.code %ld; td %p, pid %d (%s); peer td %p, peer pid %d (%s)\n",
-	    __func__, (long)td->td_frame->tf_t[0], SYS_copark, (long)peertd->td_frame->tf_t[0],
+	    ("%s: td_sa.code %ld != SYS_copark %d; home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
+	    __func__, (long)td->td_frame->tf_t[0], SYS_copark, (long)hometd->td_frame->tf_t[0],
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
-	    peertd, peertd->td_proc->p_pid, peertd->td_proc->p_comm));
+	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #elif defined(__aarch64__)
 	KASSERT(td->td_frame->tf_x[8] == SYS_copark,
-	    ("%s: td_sa.code %ld != SYS_copark %d; peer td_sa.code %ld; td %p, pid %d (%s); peer td %p, peer pid %d (%s)\n",
-	    __func__, (long)td->td_frame->tf_x[8], SYS_copark, (long)peertd->td_frame->tf_x[8],
+	    ("%s: td_sa.code %ld != SYS_copark %d; home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
+	    __func__, (long)td->td_frame->tf_x[8], SYS_copark, (long)hometd->td_frame->tf_x[8],
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
-	    peertd, peertd->td_proc->p_pid, peertd->td_proc->p_comm));
+	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #else
 #error "what architecture is this?"
 #endif
@@ -1323,9 +1323,9 @@ DB_SHOW_COMMAND(scb, db_show_scb)
 {
 	struct switchercb scb;
 	struct proc *p;
-	struct thread *td, *borrowertd;
+	struct thread *td, *hometd;
 	int error;
-	bool have_scb, shown_borrowertd;
+	bool have_scb, shown_hometd;
 
 	if (have_addr) {
 		error = copyincap(___USER_CFROMPTR(addr, userspace_root_cap, false),
@@ -1347,22 +1347,22 @@ DB_SHOW_COMMAND(scb, db_show_scb)
 		    td->td_scb, td, p->p_pid, p->p_comm, db_get_stack_pid(td));
 		db_print_td_scb(td);
 
-		borrowertd = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
-		shown_borrowertd = false;
+		hometd = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
+		shown_hometd = false;
 
 		have_scb = colocation_fetch_caller_scb(td, &scb);
 		if (have_scb) {
-			if (borrowertd != (__cheri_fromcap struct thread *)scb.scb_home_td) {
+			if (hometd != (__cheri_fromcap struct thread *)scb.scb_home_td) {
 				td = (__cheri_fromcap struct thread *)scb.scb_home_td;
 				p = td->td_proc;
 				db_printf(" caller's SCB %#lp owned by thread %p, pid %d (%s), stack owned by %d:\n",
 				    td->td_scb, td, p->p_pid, p->p_comm, db_get_stack_pid(td));
 			} else {
-				td = borrowertd;
+				td = hometd;
 				p = td->td_proc;
 				db_printf(" caller's SCB %#lp for borrowing thread %p, pid %d (%s), stack owned by %d:\n",
 				    td->td_scb, td, p->p_pid, p->p_comm, db_get_stack_pid(td));
-				shown_borrowertd = true;
+				shown_hometd = true;
 			}
 			db_print_scb(td, &scb);
 		}
@@ -1370,23 +1370,23 @@ DB_SHOW_COMMAND(scb, db_show_scb)
 		td = curthread;
 		have_scb = colocation_fetch_callee_scb(td, &scb);
 		if (have_scb) {
-			if (borrowertd != (__cheri_fromcap struct thread *)scb.scb_home_td) {
+			if (hometd != (__cheri_fromcap struct thread *)scb.scb_home_td) {
 				td = (__cheri_fromcap struct thread *)scb.scb_home_td;
 				p = td->td_proc;
 				db_printf(" callee's SCB %#lp owned by thread %p, pid %d (%s), stack owned by %d:\n",
 				    td->td_scb, td, p->p_pid, p->p_comm, db_get_stack_pid(td));
 			} else {
-				td = borrowertd;
+				td = hometd;
 				p = td->td_proc;
 				db_printf(" callee's SCB %#lp for borrowing thread %p, pid %d (%s), stack owned by %d:\n",
 				    td->td_scb, td, p->p_pid, p->p_comm, db_get_stack_pid(td));
-				shown_borrowertd = true;
+				shown_hometd = true;
 			}
 			db_print_scb(td, &scb);
 		}
 
-		if (!shown_borrowertd && borrowertd != NULL) {
-			td = borrowertd;
+		if (!shown_hometd && hometd != NULL) {
+			td = hometd;
 			p = td->td_proc;
 			db_printf(" borrowing thread %p, pid %d (%s), stack owned by %d\n",
 			    td, p->p_pid, p->p_comm, db_get_stack_pid(td));

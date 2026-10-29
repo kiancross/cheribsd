@@ -295,7 +295,7 @@ ast_sig(struct thread *td, int tda)
 {
 	struct proc *p;
 #if __has_feature(capabilities)
-	struct thread *peertd;
+	struct thread *hometd;
 #endif
 	int old_boundary, sig;
 	bool borrowing, resched_sigs;
@@ -336,9 +336,9 @@ ast_sig(struct thread *td, int tda)
 	* Check if we're borrowing a thread over a cocall; if so - just
 	* ignore the signals, we can't deliver them here.
 	*/
-	colocation_get_peer(td, &peertd);
-	if (peertd != NULL) {
-		//printf("%s: bingo, td %p, peertd %p\n", __func__, td, peertd);
+	colocation_guest_home(td, &hometd);
+	if (hometd != NULL) {
+		//printf("%s: bingo, td %p, hometd %p\n", __func__, td, hometd);
 		borrowing = true;
 	}
 #endif
@@ -2228,7 +2228,7 @@ trapsignal(struct thread *td, ksiginfo_t *ksi)
 	struct sigacts *ps;
 	struct proc *p;
 #if __has_feature(capabilities)
-	struct thread *origtd, *peertd;
+	struct thread *origtd, *hometd;
 #endif
 	sigset_t sigmask;
 	bool borrowing = false;
@@ -2241,11 +2241,11 @@ trapsignal(struct thread *td, ksiginfo_t *ksi)
 	 * signal to them.
 	 */
 	origtd = td;
-	colocation_get_peer(td, &peertd);
-	if (peertd != NULL) {
-		//printf("%s: bingo, td %p, peertd %p\n", __func__, td, peertd);
+	colocation_guest_home(td, &hometd);
+	if (hometd != NULL) {
+		//printf("%s: bingo, td %p, hometd %p\n", __func__, td, hometd);
 		borrowing = true;
-		td = peertd;
+		td = hometd;
 	}
 
 retry:
@@ -2259,7 +2259,7 @@ retry:
 
 #if __has_feature(capabilities)
 	/*
-	 * XXX-JHB: If the peer process has exited, then deliver the
+	 * XXX-JHB: If the guest's process has exited, then deliver the
 	 * signal to the original thread.  We can't just ignore the
 	 * signal as the current thread will just keep looping
 	 * retrying the faulting instruction.

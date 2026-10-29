@@ -198,7 +198,7 @@ void	init_linker_file_cap_relocs(const void *start_relocs,
  */
 struct trapframe;
 void	colocation_cleanup(struct thread *td);
-void	colocation_get_peer(struct thread *td, struct thread **peertdp);
+void	colocation_guest_home(struct thread *td, struct thread **hometdp);
 void	colocation_thread_exit(struct thread *td);
 void	colocation_vacate(struct thread *td);
 bool	colocation_trap_in_switcher(struct thread *td,
