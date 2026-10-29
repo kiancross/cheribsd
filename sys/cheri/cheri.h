@@ -204,7 +204,7 @@ void	colocation_unborrow(struct thread *td);
 bool	colocation_trap_in_switcher(struct thread *td,
 	    struct trapframe *trapframe, const char *msg);
 void	colocation_update_tls(struct thread *td);
-void	db_print_scb_td(struct thread *td);
+void	db_print_td_scb(struct thread *td);
 #endif /* !_KERNEL */
 
 /*

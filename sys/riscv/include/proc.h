@@ -54,7 +54,7 @@ struct switchercb {
 	/*
 	 * Thread owning the context; the same thread that called cosetup(2).
 	 */
-	struct thread * __capability		scb_td;
+	struct thread * __capability		scb_home_td;
 
 	/*
 	 * Thread owning the context we're lending our thread to.  When

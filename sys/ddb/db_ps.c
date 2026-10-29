@@ -512,7 +512,7 @@ DB_SHOW_COMMAND(thread, db_show_thread)
 	}
 #ifdef CPU_CHERI
 	db_printf(" scb: %#lp\n", td->td_scb);
-	db_print_scb_td(td);
+	db_print_td_scb(td);
 #endif
 }
 
