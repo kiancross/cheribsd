@@ -36,15 +36,13 @@
 .option capmode
 
 /*
- * Everywhere below the "caller" and "callee" terms are swapped.
- * In other words, the "caller" here is the same thread as the "caller"
- * on the cocall(2) side.  We - the thread calling into coaccept(2) - are
- * called the callee here.
+ * As in the cocall switcher, the "caller" is the code that called
+ * cocall(2).  We -- the code calling into coaccept(2) -- are the callee.
  *
  * Register usage: we save and restore csp and cra.  The rest gets zeroed;
  * the libc wrappers are responsible for saving and restoring the context.
  *
- * Note that this code executes while ignoring all the signals - a trapping
+ * Note that this code executes while ignoring all the signals: a trapping
  * instruction will just get skipped over.
  *
  * Layout of 'struct switchercb', pointed to by ct6/idc (callee side) and,
@@ -89,7 +87,7 @@ SWITCHER_ENTRY(switcher_coaccept)
 
 	/*
 	 * Is this the first invocation of coaccept, or rather a response
-	 * for a ccall()?  If the former - call covacate(2).
+	 * for a cocall?  If the former, call covacate(2).
 	 */
 	cgetlen	t1, caller
 	bnez	t1, .Lhave_caller
@@ -132,7 +130,7 @@ SWITCHER_ENTRY(switcher_coaccept)
 	/*
 	 * Do the data transfer back to the caller.  The reason
 	 * for this is to mimic what the "syscall_timing pipeping"
-	 * is doing - it transfers the data there and back, both
+	 * is doing: it transfers the data there and back, both
 	 * sides.
 	 */
 	clc	ct4, SCB_INBUF(caller)
@@ -156,7 +154,8 @@ SWITCHER_ENTRY(switcher_coaccept)
 	bgtz	t5, .Lcopy_loop
 
 	/*
-	 * Zero out the scb_peer_scb variables, releasing the spinlock.
+	 * Zero out the caller's scb_target_scb and our scb_caller_scb,
+	 * releasing the spinlock.
 	 */
 	csc	cnull, SCB_TARGET_SCB(caller)
 	csc	cnull, SCB_CALLER_SCB(callee)

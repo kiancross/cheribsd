@@ -200,7 +200,7 @@ SWITCHER_MARKER(switcher_cocall_copy_end)
 	li x31, 0
 
 	/*
-	 * "Return" to the callee - or the caller, if returning error.
+	 * "Return" to the callee, or to the caller if returning an error.
 	 */
 	cret
 .Llock_busy:
@@ -216,7 +216,7 @@ SWITCHER_MARKER(switcher_cocall_copy_end)
 	nop
 
 	/*
-	 * Nope - length zero means we need to return error encoded as offset.
+	 * No: length zero means we need to return error encoded as offset.
 	 */
 	cgetoffset	a0, ct1
 	li	t0, 1

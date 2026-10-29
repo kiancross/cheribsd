@@ -790,7 +790,7 @@ struct proc {
 	LIST_ENTRY(proc) p_jaillist;	/* (d) Jail process linkage. */
 
 	/*
-	 * Capability vector, see coxecvec(2).
+	 * Capability vector, see coexecvec(2).
 	 */
 	int			p_capc;
 	void * __capability	*p_capv;

@@ -40,17 +40,14 @@
 #include <machine/switcher.h>
 
 /*
- * Everywhere below the "caller" and "callee" terms are swapped.
- * In other words, the "caller" here is the same thread as the "caller"
- * on the cocall(2) side.  We - the thread calling into coaccept(2) - are
- * called the callee here.
+ * As in the cocall switcher, the "caller" is the code that called
+ * cocall(2).  We -- the code calling into coaccept(2) -- are the callee.
  *
- * Note that this code executes while ignoring all the signals - a trapping
+ * Note that this code executes while ignoring all the signals: a trapping
  * instruction will just get skipped over.
  *
- * The switchercb is pointed to by c29/c29 (callee side) and, later on,
+ * The switchercb is pointed to by c29 (callee side) and, later on,
  * c8 (caller side).
- *
  */
 
 #define	SWITCHER_ENTRY(sym)					\
@@ -119,7 +116,7 @@ SWITCHER_ENTRY(switcher_coaccept)
 
 	/*
 	 * Is this the first invocation of coaccept, or rather a response
-	 * for a ccall()?  If the former - call covacate(2).
+	 * for a cocall?  If the former, call covacate(2).
 	 */
 	gclen	x9, c8
 	cbnz	x9, .Lhave_caller
@@ -206,7 +203,7 @@ SWITCHER_ENTRY(switcher_coaccept)
 	/*
 	 * Do the data transfer back to the caller.  The reason
 	 * for this is to mimic what the "syscall_timing pipeping"
-	 * is doing - it transfers the data there and back, both
+	 * is doing: it transfers the data there and back, both
 	 * sides.
 	 */
 	ldr	c12, SCB_INBUF(c8)
@@ -230,7 +227,8 @@ SWITCHER_ENTRY(switcher_coaccept)
 	cbnz	x13, .Lcopy_loop
 
 	/*
-	 * Zero out the scb_peer_scb variables, releasing the spinlock.
+	 * Zero out the caller's scb_target_scb and our scb_caller_scb,
+	 * releasing the spinlock.
 	 */
 	str	czr, SCB_TARGET_SCB(c8)
 	str	czr, SCB_CALLER_SCB(c29)
@@ -260,9 +258,9 @@ SWITCHER_ENTRY(switcher_coaccept)
 	mov	x16, 0
 	mov	x17, 0
 	mov	x18, 0
-	/* Preserve x18-x28, restored from caller's SCB. */
+	/* Preserve x19-x28, restored from caller's SCB. */
 	mov	x29, 0
-	/* Preserve x30 (lr) and csp, restored from calee's SCB. */
+	/* Preserve x30 (lr) and csp, restored from caller's SCB. */
 
 	/*
 	 * Bye!
