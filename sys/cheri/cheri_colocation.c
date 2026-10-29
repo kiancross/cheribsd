@@ -1242,11 +1242,10 @@ db_print_scb(struct thread *td, struct switchercb *scbp)
 	    scbp->scb_target_unsealcap);
 	db_print_cap(td, "    scb_csp:              ", scbp->scb_csp);
 	db_print_cap(td, "    scb_cra:              ", scbp->scb_cra);
-	db_print_cap(td, "    scb_cookiep (ca2):    ", scbp->scb_cookiep);
-	db_print_cap(td, "    scb_outbuf (ca3):     ", scbp->scb_outbuf);
-	db_printf(       "    scb_outlen (a4):      %zd\n", scbp->scb_outlen);
-	db_print_cap(td, "    scb_inbuf (ca5):      ", scbp->scb_inbuf);
-	db_printf(       "    scb_inlen (a6):       %zd\n", scbp->scb_inlen);
+	db_print_cap(td, "    scb_outbuf:           ", scbp->scb_outbuf);
+	db_printf(       "    scb_outlen:           %zu\n", scbp->scb_outlen);
+	db_print_cap(td, "    scb_inbuf:            ", scbp->scb_inbuf);
+	db_printf(       "    scb_inlen:            %zu\n", scbp->scb_inlen);
 	db_print_cap(td, "    scb_cookiep:          ", scbp->scb_cookiep);
 #ifdef __aarch64__
 	db_print_cap(td, "    scb_c19:              ", scbp->scb_c19);
