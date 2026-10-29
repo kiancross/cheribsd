@@ -3,5 +3,5 @@ FBSD_1.5 {
   cosetup;
   coregister;
   colookup;
-  copark;
+  covacate;
 };

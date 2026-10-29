@@ -775,7 +775,7 @@ int	kern_coregister(struct thread *td, const char * __capability namep,
 int	kern_colookup(struct thread *td, const char * __capability namep,
 	    void * __capability * __capability capp);
 int	kern_cogetpid(struct thread *td, pid_t * __capability pidp);
-int	kern_copark(struct thread *td);
+int	kern_covacate(struct thread *td);
 int	kern_cocall_slow(void * __capability target,
 	    const void * __capability outbuf, size_t outlen,
 	    void * __capability inbuf, size_t inlen);

@@ -558,7 +558,7 @@ struct colookup_args {
 	char name_l_[PADL_(const char * __kerncap)]; const char * __kerncap name; char name_r_[PADR_(const char * __kerncap)];
 	char cap_l_[PADL_(void * __kerncap __capability * __kerncap)]; void * __kerncap __capability * __kerncap cap; char cap_r_[PADR_(void * __kerncap __capability * __kerncap)];
 };
-struct copark_args {
+struct covacate_args {
 	syscallarg_t dummy;
 };
 struct setgid_args {
@@ -2076,7 +2076,7 @@ int	sys_ntp_adjtime(struct thread *, struct ntp_adjtime_args *);
 int	sys__cosetup(struct thread *, struct _cosetup_args *);
 int	sys_coregister(struct thread *, struct coregister_args *);
 int	sys_colookup(struct thread *, struct colookup_args *);
-int	sys_copark(struct thread *, struct copark_args *);
+int	sys_covacate(struct thread *, struct covacate_args *);
 int	sys_setgid(struct thread *, struct setgid_args *);
 int	sys_setegid(struct thread *, struct setegid_args *);
 int	sys_seteuid(struct thread *, struct seteuid_args *);
@@ -3037,7 +3037,7 @@ int	freebsd13_swapoff(struct thread *, struct freebsd13_swapoff_args *);
 #define	SYS_AUE__cosetup	AUE_NULL
 #define	SYS_AUE_coregister	AUE_NULL
 #define	SYS_AUE_colookup	AUE_NULL
-#define	SYS_AUE_copark	AUE_NULL
+#define	SYS_AUE_covacate	AUE_NULL
 #define	SYS_AUE_setgid	AUE_SETGID
 #define	SYS_AUE_setegid	AUE_SETEGID
 #define	SYS_AUE_seteuid	AUE_SETEUID

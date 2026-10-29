@@ -246,7 +246,7 @@ struct sysent sysent[] = {
 	{ .sy_narg = AS(_cosetup_args), .sy_call = (sy_call_t *)sys__cosetup, .sy_auevent = AUE_NULL, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 177 = _cosetup */
 	{ .sy_narg = AS(coregister_args), .sy_call = (sy_call_t *)sys_coregister, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_STATIC },	/* 178 = coregister */
 	{ .sy_narg = AS(colookup_args), .sy_call = (sy_call_t *)sys_colookup, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_STATIC },	/* 179 = colookup */
-	{ .sy_narg = 0, .sy_call = (sy_call_t *)sys_copark, .sy_auevent = AUE_NULL, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 180 = copark */
+	{ .sy_narg = 0, .sy_call = (sy_call_t *)sys_covacate, .sy_auevent = AUE_NULL, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 180 = covacate */
 	{ .sy_narg = AS(setgid_args), .sy_call = (sy_call_t *)sys_setgid, .sy_auevent = AUE_SETGID, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 181 = setgid */
 	{ .sy_narg = AS(setegid_args), .sy_call = (sy_call_t *)sys_setegid, .sy_auevent = AUE_SETEGID, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 182 = setegid */
 	{ .sy_narg = AS(seteuid_args), .sy_call = (sy_call_t *)sys_seteuid, .sy_auevent = AUE_SETEUID, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 183 = seteuid */

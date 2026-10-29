@@ -1155,7 +1155,7 @@
 		);
 	}
 180	AUE_NULL	STD|CAPENABLED	{
-		int copark(void);
+		int covacate(void);
 	}
 181	AUE_SETGID	STD|CAPENABLED {
 		int setgid(
