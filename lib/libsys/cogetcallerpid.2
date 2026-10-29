@@ -29,12 +29,12 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd March 17, 2022
+.Dd October 29, 2026
 .Dt COGETCALLERPID 2
 .Os
 .Sh NAME
-.Nm COGETCALLERPID
-.Nd get calling process identification
+.Nm cogetcallerpid
+.Nd get the PID of the process whose cocall the calling thread is serving
 .Sh LIBRARY
 .Lb libc
 .Sh SYNOPSIS
@@ -44,8 +44,9 @@
 .Sh DESCRIPTION
 The
 .Fn cogetcallerpid
-writes PID of the calling process into the variable pointed at by
-.Ar pidp .
+system call writes the PID of the process whose cocall the calling thread
+is serving into the variable pointed at by
+.Fa pidp .
 It is intended for use on the callee side, after successfully returning from
 .Xr coaccept 2 .
 .Pp
@@ -72,7 +73,7 @@ The
 argument
 points outside the process's allocated address space.
 .It Bq Er ESRCH
-Unable to determine identity of the caller.
+The calling thread is not serving a cocall.
 .El
 .Sh SEE ALSO
 .Xr copong 1 ,
@@ -85,7 +86,7 @@ Unable to determine identity of the caller.
 .Xr cocachedcallerpid 3
 .Sh HISTORY
 The
-.Fn coaccept
+.Fn cogetcallerpid
 system call first appeared in
 .Tn CheriBSD .
 .Sh AUTHORS
