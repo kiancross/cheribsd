@@ -1038,8 +1038,9 @@ CHERIBSDTEST(colocation_served_incumbent_vacate,
     "(multi-client cocall)",
     .ct_child_func = colocation_served_incumbent_child,
     .ct_xfail_reason =
-	"Multi-client cocall is not yet supported: a second caller's cocall "
-	"clears the first caller's borrow record")
+	"Multi-client cocall is not yet supported: the callee's code must go "
+	"home to a thread that runs the first caller's code, and nothing "
+	"evicts that code")
 {
 	run_colocated_children(3, "incumbent saw the wrong pid");
 }
@@ -1128,9 +1129,9 @@ CHERIBSDTEST(colocation_pending_callee_vacate,
     "(multi-client cocall)",
     .ct_child_func = colocation_pending_callee_child,
     .ct_xfail_reason =
-	"Multi-client cocall is not yet supported: a second caller's cocall "
-	"clears the first caller's borrow record, and nothing evicts the first "
-	"caller from the callee's home thread")
+	"Multi-client cocall is not yet supported: the callee's code must go "
+	"home to a thread that runs the first caller's code, and nothing "
+	"evicts that code")
 {
 	run_colocated_children(3, "callee saw the wrong pid");
 }
@@ -1214,10 +1215,7 @@ CHERIBSDTEST(colocation_pending_incumbent_vacate,
     "Check that, while a second caller's cocall to the same callee is still "
     "pending, the first caller's next syscall runs on its own thread as "
     "itself (multi-client cocall)",
-    .ct_child_func = colocation_pending_incumbent_child,
-    .ct_xfail_reason =
-	"Multi-client cocall is not yet supported: a second caller's cocall "
-	"clears the first caller's borrow record")
+    .ct_child_func = colocation_pending_incumbent_child)
 {
 	run_colocated_children(3, "incumbent saw the wrong pid");
 }
@@ -1510,10 +1508,7 @@ CHERIBSDTEST(colocation_nested_incumbent_vacate,
     "second caller, with a first caller hosted on its thread, the nested "
     "callee's syscall and the first caller's next syscall each run as their "
     "own process (multi-client cocall)",
-    .ct_child_func = colocation_nested_incumbent_child,
-    .ct_xfail_reason =
-	"Multi-client cocall is not yet supported: a second caller's cocall "
-	"clears the first caller's borrow record")
+    .ct_child_func = colocation_nested_incumbent_child)
 {
 	run_colocated_children(4, "incumbent saw the wrong pid");
 }

@@ -135,24 +135,6 @@ SWITCHER_ENTRY(switcher_coaccept)
 
 .Lhave_caller:
 	/*
-	 * If scb_borrower_td in the caller's scb is NULL, then
-	 * the current thread is the callee thread and is going
-	 * to borrow the caller thread.  Set scb_borrower_td in
-	 * the callee's scb to the caller thread.  However, if
-	 * scb_borrower_td is not NULL, then the caller's thread
-	 * is returning to the caller and scb_borrower_thread
-	 * needs to be set to NULL in the caller's scb.
-	 */
-	ldr	x9, SCB_BORROWER_TD(c8)
-	cbnz	x9, 4f
-	ldr	c11, SCB_HOME_TD(c8)
-	str	c11, SCB_BORROWER_TD(c29)
-	b	5f
-4:
-	str	xzr, SCB_BORROWER_TD(c8)
-5:
-
-	/*
 	 * Restore the caller's context.
 	 */
 	ldr	c10, SCB_CSP(c8)
@@ -210,6 +192,16 @@ SWITCHER_ENTRY(switcher_coaccept)
 	ldr	c11, [c3, x13]
 	str	c11, [c12, x13]
 	cbnz	x13, .Lcopy_loop
+
+	/*
+	 * Record that the caller's code runs on this thread now, by the
+	 * same rule as in cheri_cocall.S.  It must come before the release
+	 * below: a cocall that takes the lock next overwrites our runner
+	 * field.
+	 */
+	ldr	c12, SCB_RUNNER_SCB(c29)
+	str	c8, SCB_GUEST_SCB(c12)
+	str	c12, SCB_RUNNER_SCB(c8)
 
 	/*
 	 * Zero out the caller's scb_target_scb and our scb_caller_scb,

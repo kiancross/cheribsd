@@ -132,40 +132,6 @@ SWITCHER_ENTRY(switcher_cocall)
 	cbnz	w11, .Ltake_lock
 
 	/*
-	 * If scb_borrower_td in the callee's scb is NULL, then
-	 * the current thread is the caller thread and is going
-	 * to borrow the callee thread.  Set scb_borrower_td in
-	 * the caller's scb to the callee thread.  However, if
-	 * scb_borrower_td is not NULL, then the callee's thread
-	 * is returning to the callee and scb_borrower_thread
-	 * needs to be set to NULL in the callee's scb.
-	 *
-	 * XXX: The non-NULL branch assumes that the callee's
-	 * thread hosts this caller's code, and clears the
-	 * record without checking.  Say A cocalls B, and
-	 * B's reply leaves A's code on B's thread.  If C then
-	 * cocalls B, this branch clears the record that A's
-	 * code is on B's thread.  What A's next syscall then
-	 * does depends on whether B has replied to C:
-	 *
-	 *  - Before the reply, the syscall runs as B.  See
-	 *    cheribsdtest colocation_pending_incumbent_vacate.
-	 *
-	 *  - After the reply, B's record names C's thread, which is
-	 *    not waiting in covacate(2), so the syscall retries for
-	 *    ever in colocation_vacate().  See cheribsdtest
-	 *    colocation_served_incumbent_vacate.
-	 */
-	ldr	x9, SCB_BORROWER_TD(c8)
-	cbnz	x9, 5f
-	ldr	c12, SCB_HOME_TD(c8)
-	str	c12, SCB_BORROWER_TD(c29)
-	b	6f
-5:
-	str	xzr, SCB_BORROWER_TD(c8)
-6:
-
-	/*
 	 * Put the caller cookie (caller's data capability with the tag
 	 * stripped off) where the callee wants it.
 	 */
@@ -234,6 +200,20 @@ SWITCHER_MARKER(switcher_cocall_copy_start)
 SWITCHER_MARKER(switcher_cocall_copy_end)
 
 	/*
+	 * Record that the callee's code runs on this thread now.  The
+	 * record is kept in the thread's own SCB, which the caller's
+	 * runner pointer names.  coaccept(2) runs the same rule to resume
+	 * the caller.  When a switch hands a thread back to its own code,
+	 * as a reply or a cocall from hosted code to its host can, the
+	 * record names the thread's own SCB.  The rule follows the copy,
+	 * so a fault in the copy, which raises a signal for the caller
+	 * rather than failing the cocall, leaves the record unchanged.
+	 */
+	ldr	c12, SCB_RUNNER_SCB(c29)
+	str	c8, SCB_GUEST_SCB(c12)
+	str	c12, SCB_RUNNER_SCB(c8)
+
+	/*
 	 * We're returning success; clear the carry flag.
 	 */
 	mov	x0, 0
@@ -298,7 +278,6 @@ SWITCHER_MARKER(switcher_cocall_copy_onfault)
 	stlr	czr, SCB_CALLER_SCB(c9)
 
 	/* Clear state in the caller's scb. */
-	str	czr, SCB_BORROWER_TD(c29)
 	str	czr, SCB_TARGET_SCB(c29)
 
 	ldr	c8, SCB_CSP(c29)
