@@ -32,6 +32,8 @@
  * SUCH DAMAGE.
  */
 
+#include "assym.inc"
+
 #include <sys/elf_common.h>
 #include <sys/errno.h>
 

@@ -80,6 +80,48 @@ ASSYM(PCB_FLAGS, offsetof(struct pcb, pcb_flags));
 
 ASSYM(P_PID, offsetof(struct proc, p_pid));
 
+#ifdef CPU_CHERI
+/*
+ * SCB_CALLER_SCB in <machine/switcher.h> has no offset, so
+ * scb_caller_scb has no ASSYM line and must come first.
+ */
+_Static_assert(offsetof(struct switchercb, scb_caller_scb) == 0,
+    "scb_caller_scb is not first in struct switchercb");
+ASSYM(SCB_TARGET_SCB_OFF, offsetof(struct switchercb, scb_target_scb));
+ASSYM(SCB_HOME_TD_OFF, offsetof(struct switchercb, scb_home_td));
+ASSYM(SCB_BORROWER_TD_OFF, offsetof(struct switchercb, scb_borrower_td));
+ASSYM(SCB_TARGET_UNSEALCAP_OFF,
+    offsetof(struct switchercb, scb_target_unsealcap));
+ASSYM(SCB_Q8_OFF, offsetof(struct switchercb, scb_q8));
+ASSYM(SCB_Q9_OFF, offsetof(struct switchercb, scb_q9));
+ASSYM(SCB_Q10_OFF, offsetof(struct switchercb, scb_q10));
+ASSYM(SCB_Q11_OFF, offsetof(struct switchercb, scb_q11));
+ASSYM(SCB_Q12_OFF, offsetof(struct switchercb, scb_q12));
+ASSYM(SCB_Q13_OFF, offsetof(struct switchercb, scb_q13));
+ASSYM(SCB_Q14_OFF, offsetof(struct switchercb, scb_q14));
+ASSYM(SCB_Q15_OFF, offsetof(struct switchercb, scb_q15));
+ASSYM(SCB_CSP_OFF, offsetof(struct switchercb, scb_csp));
+ASSYM(SCB_CRA_OFF, offsetof(struct switchercb, scb_cra));
+ASSYM(SCB_OUTBUF_OFF, offsetof(struct switchercb, scb_outbuf));
+ASSYM(SCB_OUTLEN_OFF, offsetof(struct switchercb, scb_outlen));
+ASSYM(SCB_INBUF_OFF, offsetof(struct switchercb, scb_inbuf));
+ASSYM(SCB_INLEN_OFF, offsetof(struct switchercb, scb_inlen));
+ASSYM(SCB_COOKIEP_OFF, offsetof(struct switchercb, scb_cookiep));
+ASSYM(SCB_C19_OFF, offsetof(struct switchercb, scb_c19));
+ASSYM(SCB_C20_OFF, offsetof(struct switchercb, scb_c20));
+ASSYM(SCB_C21_OFF, offsetof(struct switchercb, scb_c21));
+ASSYM(SCB_C22_OFF, offsetof(struct switchercb, scb_c22));
+ASSYM(SCB_C23_OFF, offsetof(struct switchercb, scb_c23));
+ASSYM(SCB_C24_OFF, offsetof(struct switchercb, scb_c24));
+ASSYM(SCB_C25_OFF, offsetof(struct switchercb, scb_c25));
+ASSYM(SCB_C26_OFF, offsetof(struct switchercb, scb_c26));
+ASSYM(SCB_C27_OFF, offsetof(struct switchercb, scb_c27));
+ASSYM(SCB_C28_OFF, offsetof(struct switchercb, scb_c28));
+ASSYM(SCB_TLS_OFF, offsetof(struct switchercb, scb_tls));
+ASSYM(SCB_FPCR_OFF, offsetof(struct switchercb, scb_fpcr));
+ASSYM(SCB_FPSR_OFF, offsetof(struct switchercb, scb_fpsr));
+#endif
+
 ASSYM(SF_UC, offsetof(struct sigframe, sf_uc));
 #ifdef COMPAT_FREEBSD64
 ASSYM(SF_UC64, offsetof(struct sigframe64, sf_uc));

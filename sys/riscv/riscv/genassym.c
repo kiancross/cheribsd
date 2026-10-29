@@ -72,6 +72,27 @@ ASSYM(PCB_S, offsetof(struct pcb, pcb_s));
 ASSYM(PCB_X, offsetof(struct pcb, pcb_x));
 ASSYM(PCB_FCSR, offsetof(struct pcb, pcb_fcsr));
 
+#ifdef CPU_CHERI
+/*
+ * SCB_CALLER_SCB in <machine/switcher.h> has no offset, so
+ * scb_caller_scb has no ASSYM line and must come first.
+ */
+_Static_assert(offsetof(struct switchercb, scb_caller_scb) == 0,
+    "scb_caller_scb is not first in struct switchercb");
+ASSYM(SCB_TARGET_SCB_OFF, offsetof(struct switchercb, scb_target_scb));
+ASSYM(SCB_HOME_TD_OFF, offsetof(struct switchercb, scb_home_td));
+ASSYM(SCB_BORROWER_TD_OFF, offsetof(struct switchercb, scb_borrower_td));
+ASSYM(SCB_TARGET_UNSEALCAP_OFF,
+    offsetof(struct switchercb, scb_target_unsealcap));
+ASSYM(SCB_CSP_OFF, offsetof(struct switchercb, scb_csp));
+ASSYM(SCB_CRA_OFF, offsetof(struct switchercb, scb_cra));
+ASSYM(SCB_OUTBUF_OFF, offsetof(struct switchercb, scb_outbuf));
+ASSYM(SCB_OUTLEN_OFF, offsetof(struct switchercb, scb_outlen));
+ASSYM(SCB_INBUF_OFF, offsetof(struct switchercb, scb_inbuf));
+ASSYM(SCB_INLEN_OFF, offsetof(struct switchercb, scb_inlen));
+ASSYM(SCB_COOKIEP_OFF, offsetof(struct switchercb, scb_cookiep));
+#endif
+
 ASSYM(SF_UC, offsetof(struct sigframe, sf_uc));
 #ifdef COMPAT_FREEBSD64
 ASSYM(SF64_UC, offsetof(struct sigframe64, sf_uc));

@@ -38,9 +38,6 @@
 #include <machine/frame.h>
 
 #ifdef CPU_CHERI
-/*
- * When modifying this, make sure to update <machine/switcher.h>
- */
 struct switchercb {
 	/*
 	 * SCB of the code that cocalled us.  This also serves as our
