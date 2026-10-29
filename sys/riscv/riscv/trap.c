@@ -684,7 +684,7 @@ do_trap_user(struct trapframe *frame)
 	case SCAUSE_ECALL_USER:
 		frame->tf_sepc += 4;	/* Next instruction */
 #if __has_feature(capabilities)
-		colocation_unborrow(td);
+		colocation_vacate(td);
 #endif
 		ecall_handler();
 		break;

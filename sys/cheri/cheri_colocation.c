@@ -103,9 +103,9 @@ SYSCTL_BOOL(_security_bsd, OID_AUTO, allow_colookup, CTLFLAG_RWTUN,
 static int kdb_on_switcher_trap;
 SYSCTL_INT(_debug, OID_AUTO, kdb_on_switcher_trap, CTLFLAG_RWTUN,
     &kdb_on_switcher_trap, 0, "Enter ddb(4) on switcher traps");
-static int kdb_on_unborrow;
-SYSCTL_INT(_debug, OID_AUTO, kdb_on_unborrow, CTLFLAG_RWTUN,
-    &kdb_on_unborrow, 0, "Enter ddb(4) on thread unborrow");
+static int kdb_on_vacate;
+SYSCTL_INT(_debug, OID_AUTO, kdb_on_vacate, CTLFLAG_RWTUN,
+    &kdb_on_vacate, 0, "Enter ddb(4) on vacate");
 #endif
 
 #define	COLOCATION_DEBUG(X, ...)					\
@@ -347,7 +347,7 @@ colocation_thread_exit(struct thread *td)
  * Called from trap().
  */
 void
-colocation_unborrow(struct thread *td)
+colocation_vacate(struct thread *td)
 {
 	struct switchercb scb;
 	struct thread *peertd;
@@ -368,13 +368,13 @@ colocation_unborrow(struct thread *td)
 
 #if   defined(__riscv)
 	KASSERT(td->td_frame->tf_t[0] != SYS_copark,
-	    ("%s: unborrowing for copark(); peer td_sa.code %ld; td %p, pid %d (%s); peer td %p, peer pid %d (%s)\n",
+	    ("%s: vacating for copark(); peer td_sa.code %ld; td %p, pid %d (%s); peer td %p, peer pid %d (%s)\n",
 	    __func__, (long)peertd->td_frame->tf_t[0],
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
 	    peertd, peertd->td_proc->p_pid, peertd->td_proc->p_comm));
 #elif defined(__aarch64__)
 	KASSERT(td->td_frame->tf_x[8] != SYS_copark,
-	    ("%s: unborrowing for copark(); peer td_sa.code %ld; td %p, pid %d (%s); peer td %p, peer pid %d (%s)\n",
+	    ("%s: vacating for copark(); peer td_sa.code %ld; td %p, pid %d (%s); peer td %p, peer pid %d (%s)\n",
 	    __func__, (long)peertd->td_frame->tf_x[8],
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
 	    peertd, peertd->td_proc->p_pid, peertd->td_proc->p_comm));
@@ -387,14 +387,14 @@ colocation_unborrow(struct thread *td)
 	KASSERT(peertd != td,
 	    ("%s: peertd %p == td %p\n", __func__, peertd, td));
 
-	COLOCATION_DEBUG("replacing current td %p, pid %d (%s), switchercb %lp, "
-	    "with td %p, pid %d (%s), switchercb %lp",
+	COLOCATION_DEBUG("vacating td %p, pid %d (%s), switchercb %lp, "
+	    "to td %p, pid %d (%s), switchercb %lp",
 	    td, td->td_proc->p_pid, td->td_proc->p_comm, td->td_scb,
 	    peertd, peertd->td_proc->p_pid, peertd->td_proc->p_comm, peertd->td_scb);
 
 #ifdef DDB
-	if (kdb_on_unborrow)
-		kdb_enter(KDB_WHY_CHERI, "unborrow");
+	if (kdb_on_vacate)
+		kdb_enter(KDB_WHY_CHERI, "vacate");
 #endif
 
 #ifdef __aarch64__
