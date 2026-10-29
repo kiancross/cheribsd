@@ -74,7 +74,7 @@ cocall(void * __capability target,
 			 */
 #if 0
 			/*
-			 * EAGAIN means the caller hasn't entered coaccept(2)
+			 * EAGAIN means the callee hasn't entered coaccept(2)
 			 * yet.  We will need to enter anyhow, if only to wait,
 			 * so why not just retry the whole thing.
 			 */
