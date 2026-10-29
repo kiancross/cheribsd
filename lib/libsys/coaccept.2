@@ -64,9 +64,9 @@ provides the same semantics, but implemented as a traditional system call.
 .Pp
 If
 .Ar cookiep
-is not NULL, the capability it points at will be set to an opaque,
+is not NULL, the capability it points at will be set to an opaque
 token that uniquely identifies the caller; the token can be passed to
-.Xr cogetcallerpid 2 .
+.Xr cocachedcallerpid 3 .
 The
 .Fa outbuf ,
 .Fa inbuf ,
