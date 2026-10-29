@@ -201,6 +201,10 @@ FBSDprivate_1.0 {
 	__sys_setsid;
 	_quotactl;
 	__sys_quotactl;
+	_coexecve;
+	__sys_coexecve;
+	_coexecvec;
+	__sys_coexecvec;
 	_nlm_syscall;
 	__sys_nlm_syscall;
 	_nfssvc;
@@ -213,6 +217,10 @@ FBSDprivate_1.0 {
 	__sys_sysarch;
 	_rtprio;
 	__sys_rtprio;
+	_capfromfd;
+	__sys_capfromfd;
+	_captofd;
+	__sys_captofd;
 	_semsys;
 	__sys_semsys;
 	_msgsys;
@@ -223,6 +231,14 @@ FBSDprivate_1.0 {
 	__sys_setfib;
 	_ntp_adjtime;
 	__sys_ntp_adjtime;
+	__cosetup;
+	__sys__cosetup;
+	_coregister;
+	__sys_coregister;
+	_colookup;
+	__sys_colookup;
+	_copark;
+	__sys_copark;
 	_setgid;
 	__sys_setgid;
 	_setegid;
@@ -233,6 +249,8 @@ FBSDprivate_1.0 {
 	__sys_pathconf;
 	_fpathconf;
 	__sys_fpathconf;
+	_cogetpid;
+	__sys_cogetpid;
 	_getrlimit;
 	__sys_getrlimit;
 	_setrlimit;
@@ -733,6 +751,10 @@ FBSDprivate_1.0 {
 	__sys_futimens;
 	_utimensat;
 	__sys_utimensat;
+	_cocall_slow;
+	__sys_cocall_slow;
+	_coaccept_slow;
+	__sys_coaccept_slow;
 	_fdatasync;
 	__sys_fdatasync;
 	_fstat;

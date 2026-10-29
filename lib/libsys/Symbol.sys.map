@@ -337,7 +337,6 @@ FBSD_1.4 {
 };
 
 FBSD_1.5 {
-	_coexecvec;
 	coaccept_slow;
 	cocall_slow;
 	coexecve;
