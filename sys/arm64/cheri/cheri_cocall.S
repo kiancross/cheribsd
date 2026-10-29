@@ -234,11 +234,8 @@ SWITCHER_ENTRY(switcher_cocall)
 	/*
 	 * Compare buffer sizes, put the smaller one into x13.
 	 */
-	sub	x11, x4, x13
-	cmp	x11, #0
-	bge	.Lhave_copy_len
-	mov	x13, x4
-.Lhave_copy_len:
+	cmp	x4, x13
+	csel	x13, x13, x4, hs
 	mov	x14, x13
 
 SWITCHER_MARKER(switcher_cocall_copy_start)
