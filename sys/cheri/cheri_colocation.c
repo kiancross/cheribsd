@@ -826,8 +826,8 @@ kern_covacate(struct thread *td)
 
 	if (error == 0) {
 		/*
-		 * We got woken up.  This means we got our userspace thread back
-		 * (its context is in our trapframe) and we can return with ERESTART,
+		 * We got woken up.  This means our own code is back (its
+		 * context is in our trapframe) and we can return with ERESTART,
 		 * to "bounce back" and execute the syscall userspace requested.
 		 */
 		//printf("%s: got switched to, td %p, returning ERESTART\n", __func__, td);
@@ -1127,7 +1127,7 @@ sys_coaccept_slow(struct thread *td, struct coaccept_slow_args *uap)
 }
 
 /*
- * XXX: Twose two seem a bit... too simple.  Proceed with caution.
+ * XXX: These two seem a bit... too simple.  Proceed with caution.
  *
  * XXX: Perhaps we should make sure that both sides are running
  *      in the same address space.  But if they're not, then

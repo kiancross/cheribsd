@@ -37,22 +37,28 @@
  */
 struct switchercb {
 	/*
-	 * Caller context: context of the thread that cocalled us.
-	 * This also serves as the callee's spinlock.  Must be first,
-	 * as the cllc instruction doesn't take an offset.
+	 * SCB of the code that cocalled us.  This also serves as our
+	 * spinlock.  Must be first, as the load-reserved instructions
+	 * don't take an offset.  It holds one of three things:
 	 *
-	 * This can also be set to a zero-length capability, with the offset
-	 * equal to errno to be returned by cocall(2).
+	 *  - NULL: no cocall is in progress, and a cocall can take the lock.
+	 *
+	 *  - A capability to the caller's SCB: a cocall is in progress.
+	 *
+	 *  - A zero-length capability whose offset is the errno that
+	 *    cocall(2) returns: EAGAIN before the callee first calls
+	 *    coaccept(2), EPROTOTYPE while it serves cocalls through
+	 *    coaccept_slow(2), and ENOLINK once its thread has exited.
 	 */
 	struct switchercb * __capability	scb_caller_scb;
 
 	/*
-	 * Callee context, context of the thread we're cocalling into.
+	 * SCB of the code we're cocalling into.
 	 */
 	struct switchercb * __capability	scb_target_scb;
 
 	/*
-	 * Thread owning the context; the same thread that called cosetup(2).
+	 * Home thread: the thread that called cosetup(2).
 	 */
 	struct thread * __capability		scb_home_td;
 
@@ -64,42 +70,29 @@ struct switchercb {
 	struct thread * __capability		scb_borrower_td;
 
 	/*
-	 * Capability to unseal peer context.
+	 * Copy of switcher_target_sealcap, with which the switcher unseals
+	 * cocall targets.
 	 */
 	void * __capability			scb_target_unsealcap;
 
 	/*
-	 * XXX
+	 * Stack pointer and return address, saved on entry to the switcher.
 	 */
 	void * __capability			scb_csp;
-
-	/*
-	 * XXX
-	 */
 	void * __capability			scb_cra;
 
 	/*
-	 * XXX
+	 * The outbuf, outlen, inbuf, and inlen arguments of cocall(2) or
+	 * coaccept(2).
 	 */
 	const void * __capability		scb_outbuf;
-
-	/*
-	 * XXX
-	 */
 	size_t					scb_outlen;
-
-	/*
-	 * XXX
-	 */
 	void * __capability			scb_inbuf;
-
-	/*
-	 * XXX
-	 */
 	size_t					scb_inlen;
 
 	/*
-	 * XXX
+	 * The cookiep argument of coaccept(2): where a cocall puts the
+	 * caller's cookie, or NULL.
 	 */
 	void * __capability			scb_cookiep;
 };

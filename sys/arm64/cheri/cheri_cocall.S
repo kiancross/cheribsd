@@ -259,12 +259,12 @@ SWITCHER_MARKER(switcher_cocall_copy_end)
 	mov	x16, 0
 	mov	x17, 0
 	mov	x18, 0
-	/* Preserve x18-x28, restored from calee's SCB. */
+	/* Preserve x19-x28, restored from callee's SCB. */
 	mov	x29, 0
-	/* Preserve x30 (lr) and csp, restored from calee's SCB. */
+	/* Preserve x30 (lr) and csp, restored from callee's SCB. */
 
 	/*
-	 * "Return" to the callee - or the caller, if returning error.
+	 * "Return" to the callee, or to the caller if returning an error.
 	 */
 	rets	c30
 .Llock_busy:
@@ -279,7 +279,7 @@ SWITCHER_MARKER(switcher_cocall_copy_end)
 	cbnz	x10, .Ltake_lock
 
 	/*
-	 * Nope - length zero means we need to return error encoded as offset.
+	 * No: length zero means we need to return error encoded as offset.
 	 * Set the carry bit to let the libc stub know it's an error.
 	 */
 	gcoff	x0, c9
