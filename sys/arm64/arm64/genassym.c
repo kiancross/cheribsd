@@ -90,6 +90,7 @@ _Static_assert(offsetof(struct switchercb, scb_caller_scb) == 0,
 ASSYM(SCB_TARGET_SCB_OFF, offsetof(struct switchercb, scb_target_scb));
 ASSYM(SCB_HOME_TD_OFF, offsetof(struct switchercb, scb_home_td));
 ASSYM(SCB_BORROWER_TD_OFF, offsetof(struct switchercb, scb_borrower_td));
+ASSYM(SCB_RUNNER_SCB_OFF, offsetof(struct switchercb, scb_runner_scb));
 ASSYM(SCB_TARGET_UNSEALCAP_OFF,
     offsetof(struct switchercb, scb_target_unsealcap));
 ASSYM(SCB_Q8_OFF, offsetof(struct switchercb, scb_q8));

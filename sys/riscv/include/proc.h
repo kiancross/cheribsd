@@ -67,6 +67,12 @@ struct switchercb {
 	struct thread * __capability		scb_borrower_td;
 
 	/*
+	 * SCB of the thread running this SCB's code now, or this SCB
+	 * itself when the code is on its home thread.
+	 */
+	struct switchercb * __capability	scb_runner_scb;
+
+	/*
 	 * Copy of switcher_target_sealcap, with which the switcher unseals
 	 * cocall targets.
 	 */

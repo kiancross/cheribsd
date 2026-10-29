@@ -534,6 +534,7 @@ setup_scb(struct thread *td)
 	scb.scb_home_td = (__cheri_tocap void * __capability)td;
 	scb.scb_borrower_td = NULL;
 	scb.scb_caller_scb = errno_cap(EAGAIN);
+	scb.scb_runner_scb = td->td_scb;
 	colocation_store_scb(td, &scb);
 
 	return (0);
@@ -1185,6 +1186,7 @@ db_print_scb(struct thread *td, struct switchercb *scbp)
 	db_print_cap(td, "    scb_target_scb:       ", scbp->scb_target_scb);
 	db_print_cap(td, "    scb_home_td:          ", scbp->scb_home_td);
 	db_print_cap(td, "    scb_borrower_td:      ", scbp->scb_borrower_td);
+	db_print_cap(td, "    scb_runner_scb:       ", scbp->scb_runner_scb);
 	db_print_cap(td, "    scb_target_unsealcap: ",
 	    scbp->scb_target_unsealcap);
 	db_print_cap(td, "    scb_csp:              ", scbp->scb_csp);
