@@ -139,9 +139,8 @@ SWITCHER_ENTRY(switcher_coaccept)
 	/*
 	 * Compare buffer sizes, put the smaller one into t5.
 	 */
-	sub	t3, a4, t5
 	mv	a0, t5
-	bgez	t3, .Lcopy_loop
+	bgeu	a4, t5, .Lcopy_loop
 	mv	t5, a4
 	mv	a0, a4
 
