@@ -28,6 +28,8 @@
  * SUCH DAMAGE.
  */
 
+#include "assym.inc"
+
 #include <sys/errno.h>
 #include <machine/asm.h>
 #include <machine/cherireg.h>
@@ -40,7 +42,7 @@
  * the libc wrappers are responsible for saving and restoring the context.
  *
  * Layout of 'struct switchercb', pointed to by ct6/idc (caller) and,
- * later on, ct0 (callee), is described in sys/riscv/include/switcher.h.
+ * later on, ct0 (callee), is described in sys/riscv/include/proc.h.
  */
 #define	caller	ct6
 #define	callee	ct0

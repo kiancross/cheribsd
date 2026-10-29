@@ -33,17 +33,23 @@
 #ifndef _MACHINE_SWITCHER_H_
 #define _MACHINE_SWITCHER_H_
 
+/*
+ * Operands that address the fields of struct switchercb through base
+ * register X, for the switcher assembly.  The offsets come from
+ * genassym.c.  SCB_CALLER_SCB is a plain 0(X) because clr.c and csc.c
+ * take no offset.
+ */
 #define	SCB_CALLER_SCB(X)	0(X)
-#define	SCB_TARGET_SCB(X)	1*CHERICAP_SIZE(X)
-#define	SCB_HOME_TD(X)		2*CHERICAP_SIZE(X)
-#define	SCB_BORROWER_TD(X)	3*CHERICAP_SIZE(X)
-#define	SCB_TARGET_UNSEALCAP(X)	4*CHERICAP_SIZE(X)
-#define	SCB_CSP(X)		5*CHERICAP_SIZE(X)
-#define	SCB_CRA(X)		6*CHERICAP_SIZE(X)
-#define	SCB_OUTBUF(X)		7*CHERICAP_SIZE(X)
-#define	SCB_OUTLEN(X)		8*CHERICAP_SIZE(X)
-#define	SCB_INBUF(X)		9*CHERICAP_SIZE(X)
-#define	SCB_INLEN(X)		10*CHERICAP_SIZE(X)
-#define	SCB_COOKIEP(X)		11*CHERICAP_SIZE(X)
+#define	SCB_TARGET_SCB(X)	SCB_TARGET_SCB_OFF(X)
+#define	SCB_HOME_TD(X)		SCB_HOME_TD_OFF(X)
+#define	SCB_BORROWER_TD(X)	SCB_BORROWER_TD_OFF(X)
+#define	SCB_TARGET_UNSEALCAP(X)	SCB_TARGET_UNSEALCAP_OFF(X)
+#define	SCB_CSP(X)		SCB_CSP_OFF(X)
+#define	SCB_CRA(X)		SCB_CRA_OFF(X)
+#define	SCB_OUTBUF(X)		SCB_OUTBUF_OFF(X)
+#define	SCB_OUTLEN(X)		SCB_OUTLEN_OFF(X)
+#define	SCB_INBUF(X)		SCB_INBUF_OFF(X)
+#define	SCB_INLEN(X)		SCB_INLEN_OFF(X)
+#define	SCB_COOKIEP(X)		SCB_COOKIEP_OFF(X)
 
 #endif /* !_MACHINE_SWITCHER_H_ */

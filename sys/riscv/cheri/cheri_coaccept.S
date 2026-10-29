@@ -28,6 +28,8 @@
  * SUCH DAMAGE.
  */
 
+#include "assym.inc"
+
 #include <sys/syscall.h>
 #include <machine/asm.h>
 #include <machine/cherireg.h>
@@ -46,7 +48,7 @@
  * instruction will just get skipped over.
  *
  * Layout of 'struct switchercb', pointed to by ct6/idc (callee side) and,
- * later on, ct0 (caller side), is described in sys/riscv/include/switcher.h.
+ * later on, ct0 (caller side), is described in sys/riscv/include/proc.h.
  */
 #define	caller	ct0
 #define	callee	ct6
