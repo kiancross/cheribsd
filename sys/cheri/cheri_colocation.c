@@ -341,7 +341,7 @@ colocation_thread_exit(struct thread *td)
 
 /*
  * Assign our trapframe (userspace context) to the thread waiting
- * in copark(2) and wake it up; it'll return to userspace with ERESTART
+ * in covacate(2) and wake it up; it'll return to userspace with ERESTART
  * and then bounce back.
  *
  * Called from trap().
@@ -367,14 +367,14 @@ colocation_vacate(struct thread *td)
 	}
 
 #if   defined(__riscv)
-	KASSERT(td->td_frame->tf_t[0] != SYS_copark,
-	    ("%s: vacating for copark(); home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
+	KASSERT(td->td_frame->tf_t[0] != SYS_covacate,
+	    ("%s: vacating for covacate(); home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
 	    __func__, (long)hometd->td_frame->tf_t[0],
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
 	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #elif defined(__aarch64__)
-	KASSERT(td->td_frame->tf_x[8] != SYS_copark,
-	    ("%s: vacating for copark(); home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
+	KASSERT(td->td_frame->tf_x[8] != SYS_covacate,
+	    ("%s: vacating for covacate(); home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
 	    __func__, (long)hometd->td_frame->tf_x[8],
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
 	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
@@ -404,7 +404,7 @@ colocation_vacate(struct thread *td)
 	 * (TLS) of another thread. This overwrites this address with the
 	 * TLS starting address that actually belongs to this thread.
 	 * We have to do this here because the value in this register is written
-	 * to kernel data structures when we execute copark later on.
+	 * to kernel data structures when we execute covacate later on.
 	 */
 	WRITE_SPECIALREG_CAP(ctpidr_el0, scb.scb_tls);
 #endif
@@ -421,20 +421,20 @@ colocation_vacate(struct thread *td)
 	wakeup(&hometd->td_scb);
 
 	/*
-	 * Continue as usual, but calling copark(2) instead of whatever
+	 * Continue as usual, but calling covacate(2) instead of whatever
 	 * syscall it was.  The cpu_fetch_syscall_args() will fetch updated
 	 * arguments from the stack frame.
 	 */
 #if   defined(__riscv)
-	KASSERT(td->td_frame->tf_t[0] == SYS_copark,
-	    ("%s: td_sa.code %ld != SYS_copark %d; home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
-	    __func__, (long)td->td_frame->tf_t[0], SYS_copark, (long)hometd->td_frame->tf_t[0],
+	KASSERT(td->td_frame->tf_t[0] == SYS_covacate,
+	    ("%s: td_sa.code %ld != SYS_covacate %d; home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
+	    __func__, (long)td->td_frame->tf_t[0], SYS_covacate, (long)hometd->td_frame->tf_t[0],
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
 	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #elif defined(__aarch64__)
-	KASSERT(td->td_frame->tf_x[8] == SYS_copark,
-	    ("%s: td_sa.code %ld != SYS_copark %d; home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
-	    __func__, (long)td->td_frame->tf_x[8], SYS_copark, (long)hometd->td_frame->tf_x[8],
+	KASSERT(td->td_frame->tf_x[8] == SYS_covacate,
+	    ("%s: td_sa.code %ld != SYS_covacate %d; home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
+	    __func__, (long)td->td_frame->tf_x[8], SYS_covacate, (long)hometd->td_frame->tf_x[8],
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
 	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #else
@@ -811,19 +811,19 @@ kern_cogetpid(struct thread *td, pid_t * __capability pidp)
 }
 
 int
-sys_copark(struct thread *td, struct copark_args *uap)
+sys_covacate(struct thread *td, struct covacate_args *uap)
 {
-	return (kern_copark(td));
+	return (kern_covacate(td));
 }
 
 int
-kern_copark(struct thread *td)
+kern_covacate(struct thread *td)
 {
 	int error;
 
 	SWITCHER_LOCK();
 	error = msleep(&td->td_scb, &switcher_lock,
-	    PPAUSE | PCATCH, "copark", 0);
+	    PPAUSE | PCATCH, "covacate", 0);
 	SWITCHER_UNLOCK();
 
 	if (error == 0) {
@@ -1414,7 +1414,7 @@ sys_colookup(struct thread *td, struct colookup_args *uap)
 }
 
 int
-sys_copark(struct thread *td, struct copark_args *uap)
+sys_covacate(struct thread *td, struct covacate_args *uap)
 {
 	return (ENOSYS);
 }

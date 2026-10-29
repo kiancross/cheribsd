@@ -125,7 +125,7 @@ MIASM =  \
 	_cosetup.o \
 	coregister.o \
 	colookup.o \
-	copark.o \
+	covacate.o \
 	setgid.o \
 	setegid.o \
 	seteuid.o \

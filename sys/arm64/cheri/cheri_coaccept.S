@@ -119,16 +119,16 @@ SIGCODE(switcher_coaccept)
 
 	/*
 	 * Is this the first invocation of coaccept, or rather a response
-	 * for a ccall()?  If the former - call copark(2).
+	 * for a ccall()?  If the former - call covacate(2).
 	 */
 	gclen	x9, c8
 	cbnz	x9, 1f
 	str	czr, SCB_CALLER_SCB(c29)
-	mov	x8, SYS_copark
+	mov	x8, SYS_covacate
 	svc	#0
 
 	/*
-	 * Returned from copark(2).
+	 * Returned from covacate(2).
 	 *
 	 * XXX: Wait for the spinlock to be released.
 	 */

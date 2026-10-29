@@ -237,8 +237,8 @@ FBSDprivate_1.0 {
 	__sys_coregister;
 	_colookup;
 	__sys_colookup;
-	_copark;
-	__sys_copark;
+	_covacate;
+	__sys_covacate;
 	_setgid;
 	__sys_setgid;
 	_setegid;

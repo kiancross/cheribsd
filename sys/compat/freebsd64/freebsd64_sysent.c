@@ -247,7 +247,7 @@ struct sysent freebsd64_sysent[] = {
 	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 177 = freebsd64__cosetup */
 	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 178 = freebsd64_coregister */
 	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 179 = freebsd64_colookup */
-	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 180 = copark */
+	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 180 = covacate */
 	{ .sy_narg = AS(setgid_args), .sy_call = (sy_call_t *)sys_setgid, .sy_auevent = AUE_SETGID, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 181 = setgid */
 	{ .sy_narg = AS(setegid_args), .sy_call = (sy_call_t *)sys_setegid, .sy_auevent = AUE_SETEGID, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 182 = setegid */
 	{ .sy_narg = AS(seteuid_args), .sy_call = (sy_call_t *)sys_seteuid, .sy_auevent = AUE_SETEUID, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 183 = seteuid */

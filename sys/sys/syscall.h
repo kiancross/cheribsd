@@ -179,7 +179,7 @@
 #define	SYS__cosetup	177
 #define	SYS_coregister	178
 #define	SYS_colookup	179
-#define	SYS_copark	180
+#define	SYS_covacate	180
 #define	SYS_setgid	181
 #define	SYS_setegid	182
 #define	SYS_seteuid	183
