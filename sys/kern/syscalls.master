@@ -1207,7 +1207,7 @@
 		);
 	}
 193	AUE_NULL        STD|CAPENABLED {
-		int cogetpid(
+		int cogetcallerpid(
 		    _Out_ pid_t *pidp
 		);
 	}

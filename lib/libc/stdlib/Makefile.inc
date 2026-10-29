@@ -18,7 +18,7 @@ MISRCS+=C99_Exit.c a64l.c abort.c abs.c atexit.c atof.c atoi.c atol.c atoll.c \
 	strtoumax.c strtouq.c system.c tdelete.c tfind.c tsearch.c twalk.c
 
 .if ${MACHINE_ABI:Mpurecap}
-MISRCS+=cocachedpid.c
+MISRCS+=cocachedcallerpid.c
 .endif
 
 CFLAGS.qsort.c+= -Wsign-compare

@@ -158,9 +158,9 @@ coaccept_loop(char *registered, void * __capability target)
 		 * we are interposing.
 		 */
 		if (vflag) {
-			error = cocachedpid(&pid, cookie);
+			error = cocachedcallerpid(&pid, cookie);
 			if (error != 0)
-				warn("cogetpid");
+				warn("cocachedcallerpid");
 			printf("%s: cocall op %d, len %zd, received %zd, from pid %d -> pid %d%s\n",
 			    getprogname(), in->op, in->len, received, pid, getpid(), kflag ? " (slow)" : "");
 		}

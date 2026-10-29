@@ -341,7 +341,7 @@ FBSD_1.5 {
 	cocall_slow;
 	coexecve;
 	coexecvec;
-	cogetpid;
+	cogetcallerpid;
 	elf_aux_info;
 	fhstat;
 	fhstatfs;

@@ -249,8 +249,8 @@ FBSDprivate_1.0 {
 	__sys_pathconf;
 	_fpathconf;
 	__sys_fpathconf;
-	_cogetpid;
-	__sys_cogetpid;
+	_cogetcallerpid;
+	__sys_cogetcallerpid;
 	_getrlimit;
 	__sys_getrlimit;
 	_setrlimit;

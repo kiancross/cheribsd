@@ -173,9 +173,9 @@ coaccept_slow_cf(void)
 		errx(EX_SOFTWARE, "parent_pid %d != recvd_pid %d", parent_pid,
 		    (pid_t) recvd_pid);
 
-	error = cogetpid(&caller_pid);
+	error = cogetcallerpid(&caller_pid);
 	if (error != 0)
-		cheribsdtest_failure_err("cogetpid");
+		cheribsdtest_failure_err("cogetcallerpid");
 	if (parent_pid != caller_pid)
 		errx(EX_SOFTWARE, "parent_pid %d != caller_pid %d", parent_pid,
 		    caller_pid);

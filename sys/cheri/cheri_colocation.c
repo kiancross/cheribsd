@@ -784,14 +784,14 @@ kern_colookup(struct thread *td, const char * __capability namep,
 }
 
 int
-sys_cogetpid(struct thread *td, struct cogetpid_args *uap)
+sys_cogetcallerpid(struct thread *td, struct cogetcallerpid_args *uap)
 {
 
-	return (kern_cogetpid(td, uap->pidp));
+	return (kern_cogetcallerpid(td, uap->pidp));
 }
 
 int
-kern_cogetpid(struct thread *td, pid_t * __capability pidp)
+kern_cogetcallerpid(struct thread *td, pid_t * __capability pidp)
 {
 	struct switchercb scb;
 	bool is_callee;
@@ -1417,7 +1417,7 @@ sys_covacate(struct thread *td, struct covacate_args *uap)
 }
 
 int
-sys_cogetpid(struct thread *td, struct cogetpid_args *uap)
+sys_cogetcallerpid(struct thread *td, struct cogetcallerpid_args *uap)
 {
 	return (ENOSYS);
 }

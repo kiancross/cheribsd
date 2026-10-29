@@ -235,7 +235,7 @@ MAN+=	abort2.2 \
 	cosetup.2 \
 	coregister.2 \
 	cocall.2 \
-	cogetpid.2 \
+	cogetcallerpid.2 \
 	covacate.2 \
 	connect.2 \
 	connectat.2 \

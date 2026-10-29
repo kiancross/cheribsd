@@ -307,9 +307,9 @@ main(int argc, char **argv)
 		 * Answered.
 		 */
 		if (vflag) {
-			error = cocachedpid(&pid, cookie);
+			error = cocachedcallerpid(&pid, cookie);
 			if (error != 0)
-				warn("cogetpid");
+				warn("cocachedcallerpid");
 			printf("%s: op %d, len %zd from pid %d -> pid %d%s\n",
 			    getprogname(), in.op, in.len, pid, getpid(), kflag ? " (slow)" : "");
 		}

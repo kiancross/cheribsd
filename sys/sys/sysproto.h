@@ -578,7 +578,7 @@ struct fpathconf_args {
 	char fd_l_[PADL_(int)]; int fd; char fd_r_[PADR_(int)];
 	char name_l_[PADL_(int)]; int name; char name_r_[PADR_(int)];
 };
-struct cogetpid_args {
+struct cogetcallerpid_args {
 	char pidp_l_[PADL_(pid_t * __kerncap)]; pid_t * __kerncap pidp; char pidp_r_[PADR_(pid_t * __kerncap)];
 };
 struct getrlimit_args {
@@ -2082,7 +2082,7 @@ int	sys_setegid(struct thread *, struct setegid_args *);
 int	sys_seteuid(struct thread *, struct seteuid_args *);
 int	sys_pathconf(struct thread *, struct pathconf_args *);
 int	sys_fpathconf(struct thread *, struct fpathconf_args *);
-int	sys_cogetpid(struct thread *, struct cogetpid_args *);
+int	sys_cogetcallerpid(struct thread *, struct cogetcallerpid_args *);
 int	sys_getrlimit(struct thread *, struct getrlimit_args *);
 int	sys_setrlimit(struct thread *, struct setrlimit_args *);
 int	sys___sysctl(struct thread *, struct __sysctl_args *);
@@ -3046,7 +3046,7 @@ int	freebsd13_swapoff(struct thread *, struct freebsd13_swapoff_args *);
 #define	SYS_AUE_freebsd11_lstat	AUE_LSTAT
 #define	SYS_AUE_pathconf	AUE_PATHCONF
 #define	SYS_AUE_fpathconf	AUE_FPATHCONF
-#define	SYS_AUE_cogetpid	AUE_NULL
+#define	SYS_AUE_cogetcallerpid	AUE_NULL
 #define	SYS_AUE_getrlimit	AUE_GETRLIMIT
 #define	SYS_AUE_setrlimit	AUE_SETRLIMIT
 #define	SYS_AUE_freebsd11_getdirentries	AUE_GETDIRENTRIES
