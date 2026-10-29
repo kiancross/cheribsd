@@ -850,7 +850,7 @@ kern_cocall_slow(void * __capability target,
 	struct switchercb scb, calleescb;
 	struct switchercb * __capability targetcap;
 	struct thread *calleetd __diagused;
-	ssize_t received;
+	ssize_t retval;
 	int error;
 	bool have_scb;
 
@@ -869,7 +869,7 @@ kern_cocall_slow(void * __capability target,
 		return (EINVAL);
 	}
 
-	curproc->p_cocall_received = 0;
+	curproc->p_cocall_slow_retval = 0;
 
 	/*
 	 * Unseal the capability to the callee control block and load it.
@@ -980,16 +980,13 @@ again:
 	wakeupcap(targetcap, "callers sleeping on callee");
 	SWITCHER_UNLOCK();
 
-	/*
-	 * Return the error stored by the callee.
-	 */
-	received = curproc->p_cocall_received;
-	if (received >= 0) {
-		curthread->td_retval[0] = received;
+	retval = curproc->p_cocall_slow_retval;
+	if (retval >= 0) {
+		curthread->td_retval[0] = retval;
 		return (0);
 	}
 
-	return (-received);
+	return (-retval);
 }
 
 int
@@ -1057,7 +1054,7 @@ kern_coaccept_slow(void * __capability * __capability cookiep,
 		copied = MIN(outlen, callerscb.scb_inlen);
 		error = copyuser(outbuf, callerscb.scb_inbuf, copied);
 		if (error != 0) {
-			callerscb.scb_home_td->td_proc->p_cocall_received =
+			callerscb.scb_home_td->td_proc->p_cocall_slow_retval =
 			    -error;
 			SWITCHER_UNLOCK();
 			COLOCATION_DEBUG("copyuser error %d, waking up %lp",
@@ -1065,7 +1062,7 @@ kern_coaccept_slow(void * __capability * __capability cookiep,
 			wakeupself();
 			return (error);
 		}
-		callerscb.scb_home_td->td_proc->p_cocall_received = copied;
+		callerscb.scb_home_td->td_proc->p_cocall_slow_retval = copied;
 
 		wakeupself();
 	}
