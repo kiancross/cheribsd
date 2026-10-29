@@ -1277,10 +1277,9 @@ db_print_td_scb(struct thread *td)
 }
 
 /*
- * Return PID owning the stack mapping the current userspace trapframe stack
- * pointer points to.  Simply put: returns the PID which belongs to the
- * userspace thread, which can - due to thread borrowing - be different from
- * the PID for the kernel thread.
+ * Return the PID of the process that owns the mapping holding td's
+ * userspace stack pointer, or -1 if no mapping holds it.  While a guest
+ * runs on td, this is the guest's process, not td's.
  */
 static pid_t
 db_get_stack_pid(struct thread *td)
@@ -1353,12 +1352,12 @@ DB_SHOW_COMMAND(scb, db_show_scb)
 			if (hometd != (__cheri_fromcap struct thread *)scb.scb_home_td) {
 				td = (__cheri_fromcap struct thread *)scb.scb_home_td;
 				p = td->td_proc;
-				db_printf(" caller's SCB %#lp owned by thread %p, pid %d (%s), stack owned by %d:\n",
+				db_printf(" caller's SCB %#lp, home thread %p, pid %d (%s), stack owned by %d:\n",
 				    td->td_scb, td, p->p_pid, p->p_comm, db_get_stack_pid(td));
 			} else {
 				td = hometd;
 				p = td->td_proc;
-				db_printf(" caller's SCB %#lp for borrowing thread %p, pid %d (%s), stack owned by %d:\n",
+				db_printf(" caller's SCB %#lp, home thread %p (the guest's home), pid %d (%s), stack owned by %d:\n",
 				    td->td_scb, td, p->p_pid, p->p_comm, db_get_stack_pid(td));
 				shown_hometd = true;
 			}
@@ -1371,12 +1370,12 @@ DB_SHOW_COMMAND(scb, db_show_scb)
 			if (hometd != (__cheri_fromcap struct thread *)scb.scb_home_td) {
 				td = (__cheri_fromcap struct thread *)scb.scb_home_td;
 				p = td->td_proc;
-				db_printf(" callee's SCB %#lp owned by thread %p, pid %d (%s), stack owned by %d:\n",
+				db_printf(" callee's SCB %#lp, home thread %p, pid %d (%s), stack owned by %d:\n",
 				    td->td_scb, td, p->p_pid, p->p_comm, db_get_stack_pid(td));
 			} else {
 				td = hometd;
 				p = td->td_proc;
-				db_printf(" callee's SCB %#lp for borrowing thread %p, pid %d (%s), stack owned by %d:\n",
+				db_printf(" callee's SCB %#lp, home thread %p (the guest's home), pid %d (%s), stack owned by %d:\n",
 				    td->td_scb, td, p->p_pid, p->p_comm, db_get_stack_pid(td));
 				shown_hometd = true;
 			}
@@ -1386,7 +1385,7 @@ DB_SHOW_COMMAND(scb, db_show_scb)
 		if (!shown_hometd && hometd != NULL) {
 			td = hometd;
 			p = td->td_proc;
-			db_printf(" borrowing thread %p, pid %d (%s), stack owned by %d\n",
+			db_printf(" guest's home thread %p, pid %d (%s), stack owned by %d\n",
 			    td, p->p_pid, p->p_comm, db_get_stack_pid(td));
 		}
 	}

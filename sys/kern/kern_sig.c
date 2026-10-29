@@ -298,7 +298,7 @@ ast_sig(struct thread *td, int tda)
 	struct thread *hometd;
 #endif
 	int old_boundary, sig;
-	bool borrowing, resched_sigs;
+	bool has_guest, resched_sigs;
 
 	p = td->td_proc;
 
@@ -330,16 +330,17 @@ ast_sig(struct thread *td, int tda)
 	}
 #endif
 
-	borrowing = false;
+	has_guest = false;
 #if __has_feature(capabilities)
 	/*
-	* Check if we're borrowing a thread over a cocall; if so - just
-	* ignore the signals, we can't deliver them here.
-	*/
+	 * Leave signals pending while a guest runs on this thread: the
+	 * thread holds the guest's registers, so this process's handler
+	 * would interrupt the guest's code.
+	 */
 	colocation_guest_home(td, &hometd);
 	if (hometd != NULL) {
 		//printf("%s: bingo, td %p, hometd %p\n", __func__, td, hometd);
-		borrowing = true;
+		has_guest = true;
 	}
 #endif
 
@@ -348,7 +349,7 @@ ast_sig(struct thread *td, int tda)
 	 * p_siglist might cause process-directed signal to be handled
 	 * later.
 	 */
-	if (!borrowing && ((tda & TDAI(TDA_SIG)) != 0 || p->p_pendingcnt > 0 ||
+	if (!has_guest && ((tda & TDAI(TDA_SIG)) != 0 || p->p_pendingcnt > 0 ||
 	    !SIGISEMPTY(p->p_siglist))) {
 		sigfastblock_fetch(td);
 		PROC_LOCK(p);
@@ -2231,20 +2232,19 @@ trapsignal(struct thread *td, ksiginfo_t *ksi)
 	struct thread *origtd, *hometd;
 #endif
 	sigset_t sigmask;
-	bool borrowing = false;
+	bool has_guest = false;
 	int sig;
 
 #if __has_feature(capabilities)
 	/*
-	 * Check if we're borrowing a thread over a cocall; if so - figure
-	 * out which thread/process we're actually executing, and queue the
-	 * signal to them.
+	 * A trap on a thread that has a guest comes from the guest's code,
+	 * so queue the signal to the guest's home thread.
 	 */
 	origtd = td;
 	colocation_guest_home(td, &hometd);
 	if (hometd != NULL) {
 		//printf("%s: bingo, td %p, hometd %p\n", __func__, td, hometd);
-		borrowing = true;
+		has_guest = true;
 		td = hometd;
 	}
 
@@ -2264,10 +2264,10 @@ retry:
 	 * signal as the current thread will just keep looping
 	 * retrying the faulting instruction.
 	 */
-	if (borrowing && p->p_state != PRS_NORMAL) {
+	if (has_guest && p->p_state != PRS_NORMAL) {
 		PROC_UNLOCK(p);
 		td = origtd;
-		borrowing = false;
+		has_guest = false;
 		goto retry;
 	}
 #endif
@@ -2277,7 +2277,7 @@ retry:
 	sigmask = td->td_sigmask;
 	if (td->td_sigblock_val != 0)
 		SIGSETOR(sigmask, fastblock_mask);
-	if (!borrowing &&
+	if (!has_guest &&
 	    (p->p_flag & P_TRACED) == 0 && SIGISMEMBER(ps->ps_sigcatch, sig) &&
 	    !SIGISMEMBER(sigmask, sig)) {
 #ifdef KTRACE
