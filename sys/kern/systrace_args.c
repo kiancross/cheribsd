@@ -1006,9 +1006,9 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		*n_args = 2;
 		break;
 	}
-	/* cogetpid */
+	/* cogetcallerpid */
 	case 193: {
-		struct cogetpid_args *p = params;
+		struct cogetcallerpid_args *p = params;
 		uarg[a++] = (intptr_t)p->pidp; /* pid_t * __kerncap */
 		*n_args = 1;
 		break;
@@ -5230,7 +5230,7 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
-	/* cogetpid */
+	/* cogetcallerpid */
 	case 193:
 		switch (ndx) {
 		case 0:
@@ -10238,7 +10238,7 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 		if (ndx == 0 || ndx == 1)
 			p = "int";
 		break;
-	/* cogetpid */
+	/* cogetcallerpid */
 	case 193:
 		if (ndx == 0 || ndx == 1)
 			p = "int";

@@ -102,9 +102,9 @@ authorise_one_process(void * __capability cookie)
 	pid_t pid;
 	int error;
 
-	error = cocachedpid(&pid, cookie);
+	error = cocachedcallerpid(&pid, cookie);
 	if (error != 0) {
-		warn("cocachedpid");
+		warn("cocachedcallerpid");
 		return (ECANCELED);
 	}
 
@@ -127,9 +127,9 @@ authorise_exec(void * __capability cookie)
 	FILE *p;
 	int error, ret;
 
-	error = cocachedpid(&pid, cookie);
+	error = cocachedcallerpid(&pid, cookie);
 	if (error != 0) {
-		warn("cocachedpid");
+		warn("cocachedcallerpid");
 		return (ECANCELED);
 	}
 
@@ -397,9 +397,9 @@ main(int argc, char **argv)
 		}
 
 		if (vflag) {
-			error = cocachedpid(&pid, cookie);
+			error = cocachedcallerpid(&pid, cookie);
 			if (error != 0)
-				warn("cogetpid");
+				warn("cocachedcallerpid");
 			printf("%s: pid %d failed authorization; canceled\n",
 			    getprogname(), pid);
 		}

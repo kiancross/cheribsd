@@ -30,20 +30,20 @@
 .\" $FreeBSD$
 .\"
 .Dd March 17, 2022
-.Dt COGETPID 2
+.Dt COGETCALLERPID 2
 .Os
 .Sh NAME
-.Nm COGETPID
+.Nm COGETCALLERPID
 .Nd get calling process identification
 .Sh LIBRARY
 .Lb libc
 .Sh SYNOPSIS
 .In unistd.h
 .Ft int
-.Fn cogetpid "pid_t *pidp"
+.Fn cogetcallerpid "pid_t *pidp"
 .Sh DESCRIPTION
 The
-.Fn cogetpid
+.Fn cogetcallerpid
 writes PID of the calling process into the variable pointed at by
 .Ar pidp .
 It is intended for use on the callee side, after successfully returning from
@@ -51,18 +51,18 @@ It is intended for use on the callee side, after successfully returning from
 .Pp
 It is a system call, so it is relatively slow.
 Users are expected to use a caching wrapper, such as
-.Xr cocachedpid 3 ,
+.Xr cocachedcallerpid 3 ,
 or use a custom mechanism to keep dictionary of (cookie, pid) pairs,
 and only call
-.Fn cogetpid
+.Fn cogetcallerpid
 when the value of the cookie - filled in by
 .Xr coaccept 2 -
 cannot be found there.
 .Sh RETURN VALUES
-.Rv -std cogetpid
+.Rv -std cogetcallerpid
 .Sh ERRORS
 The
-.Fn cogetpid
+.Fn cogetcallerpid
 system call
 will fail if:
 .Bl -tag -width Er
@@ -82,7 +82,7 @@ Unable to determine identity of the caller.
 .Xr coregister 2 ,
 .Xr colookup 2 ,
 .Xr coaccept 2 ,
-.Xr cocachedpid 3
+.Xr cocachedcallerpid 3
 .Sh HISTORY
 The
 .Fn coaccept

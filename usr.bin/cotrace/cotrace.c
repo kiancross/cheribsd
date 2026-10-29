@@ -169,10 +169,10 @@ interpose(void *tmp)
 
 		if (vflag) {
 			pthread_mutex_lock(&mtx);
-			error = cocachedpid(&pid, cookie);
+			error = cocachedcallerpid(&pid, cookie);
 			pthread_mutex_unlock(&mtx);
 			if (error != 0)
-				warn("cocachedpid");
+				warn("cocachedcallerpid");
 			printf("%s: cocall from pid %d[%d] -> pid %d, received %zd, len %zd, op %d%s: \"%s\"\n",
 			    getprogname(), pid, interposer->i_index, getpid(), received, in->len, in->op,
 			    kflag ? " (slow)" : "", dumpbuf);

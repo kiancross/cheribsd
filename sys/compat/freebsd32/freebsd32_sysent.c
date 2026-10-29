@@ -260,7 +260,7 @@ struct sysent freebsd32_sysent[] = {
 	{ compat11(AS(freebsd11_freebsd32_lstat_args),freebsd32_lstat), .sy_auevent = AUE_LSTAT, .sy_flags = 0, .sy_thrcnt = SY_THR_STATIC },	/* 190 = freebsd11 freebsd32_lstat */
 	{ .sy_narg = AS(pathconf_args), .sy_call = (sy_call_t *)sys_pathconf, .sy_auevent = AUE_PATHCONF, .sy_flags = 0, .sy_thrcnt = SY_THR_STATIC },	/* 191 = pathconf */
 	{ .sy_narg = AS(fpathconf_args), .sy_call = (sy_call_t *)sys_fpathconf, .sy_auevent = AUE_FPATHCONF, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 192 = fpathconf */
-	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 193 = cogetpid */
+	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 193 = cogetcallerpid */
 	{ .sy_narg = AS(getrlimit_args), .sy_call = (sy_call_t *)sys_getrlimit, .sy_auevent = AUE_GETRLIMIT, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 194 = getrlimit */
 	{ .sy_narg = AS(setrlimit_args), .sy_call = (sy_call_t *)sys_setrlimit, .sy_auevent = AUE_SETRLIMIT, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 195 = setrlimit */
 	{ compat11(AS(freebsd11_freebsd32_getdirentries_args),freebsd32_getdirentries), .sy_auevent = AUE_GETDIRENTRIES, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 196 = freebsd11 freebsd32_getdirentries */

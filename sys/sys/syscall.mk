@@ -134,7 +134,7 @@ MIASM =  \
 	freebsd11_lstat.o \
 	pathconf.o \
 	fpathconf.o \
-	cogetpid.o \
+	cogetcallerpid.o \
 	getrlimit.o \
 	setrlimit.o \
 	freebsd11_getdirentries.o \

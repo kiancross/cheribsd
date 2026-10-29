@@ -157,9 +157,9 @@ main(int argc, char **argv)
 		}
 		if (vflag) {
 			halfcookie = (uint64_t *)&cookie;
-			error = cocachedpid(&pid, cookie);
+			error = cocachedcallerpid(&pid, cookie);
 			if (error != 0)
-				warn("cogetpid");
+				warn("cocachedcallerpid");
 			printf("%s: %s: coaccepted, pid %d, caller pid %d, cookie %#lx%lx\n",
 			    getprogname(), registered, getpid(), pid, halfcookie[0], halfcookie[1]);
 		}

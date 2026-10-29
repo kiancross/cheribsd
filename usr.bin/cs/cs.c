@@ -319,9 +319,9 @@ main(int argc, char **argv)
 		 * Answered.
 		 */
 		if (vflag) {
-			error = cocachedpid(&pid, cookie);
+			error = cocachedcallerpid(&pid, cookie);
 			if (error != 0)
-				warn("cogetpid");
+				warn("cocachedcallerpid");
 			printf("%s: op %d<%s>, len %zd from pid %d -> pid %d%s\n",
 			    getprogname(), in.op, sysdecode_syscallname(SYSDECODE_ABI_FREEBSD, in.op),
 			    in.len, pid, getpid(), kflag ? " (slow)" : "");

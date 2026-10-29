@@ -42,7 +42,7 @@ __FBSDID("$FreeBSD$");
  * XXX: LRU?
  */
 int
-cocachedpid(pid_t *pidp, void * __capability cookie)
+cocachedcallerpid(pid_t *pidp, void * __capability cookie)
 {
 	ENTRY item, *found;
 	char *str;
@@ -63,7 +63,7 @@ cocachedpid(pid_t *pidp, void * __capability cookie)
 		/*
 		 * Slow path.
 		 */
-		error = cogetpid(pidp);
+		error = cogetcallerpid(pidp);
 		if (error != 0)
 			return (error);
 		item.data = (void * __capability)(uintcap_t)*pidp;

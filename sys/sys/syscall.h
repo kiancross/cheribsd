@@ -192,7 +192,7 @@
 #define	SYS_freebsd11_lstat	190
 #define	SYS_pathconf	191
 #define	SYS_fpathconf	192
-#define	SYS_cogetpid	193
+#define	SYS_cogetcallerpid	193
 #define	SYS_getrlimit	194
 #define	SYS_setrlimit	195
 #define	SYS_freebsd11_getdirentries	196

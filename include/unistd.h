@@ -617,8 +617,8 @@ ssize_t	 cocall(void * __capability,
 int	 cosetup(int);
 int	 coregister(const char *, void * __capability *);
 int	 colookup(const char *, void * __capability *);
-int	 cogetpid(pid_t *);
-int	 cocachedpid(pid_t *, void * __capability);
+int	 cogetcallerpid(pid_t *);
+int	 cocachedcallerpid(pid_t *, void * __capability);
 int	 capvset(int *, void * __capability **, int, void * __capability);
 void	 capvfetch(int *, void * __capability **);
 
