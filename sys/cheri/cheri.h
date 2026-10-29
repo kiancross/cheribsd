@@ -129,8 +129,8 @@ extern void * __capability vmm_el2_root_cap;
 /*
  * Capabilities used for colocation.
  */
-extern void * __capability switcher_sealcap;
-extern void * __capability switcher_sealcap2;
+extern void * __capability switcher_entry_sealcap;
+extern void * __capability switcher_target_sealcap;
 extern void * __capability capfd_sealcap;
 
 /*

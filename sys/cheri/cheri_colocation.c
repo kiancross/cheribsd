@@ -70,12 +70,12 @@ __FBSDID("$FreeBSD$");
 /*
  * Capability used to seal capability pairs returned by cosetup(2).
  */
-void * __capability	switcher_sealcap = (void * __capability)-1;
+void * __capability	switcher_entry_sealcap = (void * __capability)-1;
 
 /*
  * Capability used to seal capabilities returned by coregister(2)/colookup(2).
  */
-void * __capability	switcher_sealcap2 = (void * __capability)-1;
+void * __capability	switcher_target_sealcap = (void * __capability)-1;
 
 /*
  * Capability used to seal capabilities returned by capfromfd(2).
@@ -300,7 +300,7 @@ colocation_thread_exit(struct thread *td)
 		return;
 
 	if (counregister_on_exit) {
-		target = cheri_seal(td->td_scb, switcher_sealcap2);
+		target = cheri_seal(td->td_scb, switcher_target_sealcap);
 
 		vmspace = td->td_proc->p_vmspace;
 
@@ -531,7 +531,7 @@ setup_scb(struct thread *td)
 
 	//printf("%s: scb at %p, td %p\n", __func__, (void *)addr, td);
 	memset(&scb, 0, sizeof(scb));
-	scb.scb_unsealcap = switcher_sealcap2;
+	scb.scb_target_unsealcap = switcher_target_sealcap;
 	scb.scb_home_td = (__cheri_tocap void * __capability)td;
 	scb.scb_borrower_td = NULL;
 	scb.scb_caller_scb = errno_cap(EAGAIN);
@@ -555,7 +555,7 @@ switcher_code_cap(struct thread *td, ptraddr_t base, size_t length)
 	/*
 	 * This cannot use cheri_capability_build_user_code() as that
 	 * function seals the resulting capability as a sentry.  This
-	 * needs to seal the capability via the switcher_sealcap
+	 * needs to seal the capability via the switcher_entry_sealcap
 	 * instead.
 	 */
 	codecap = cheri_capability_build_user_rwx(CHERI_CAP_USER_CODE_PERMS,
@@ -595,12 +595,13 @@ kern_cosetup(struct thread *td, int what,
 	struct vmspace *vmspace;
 	int error;
 
-	KASSERT(switcher_sealcap != (void * __capability)-1,
-             ("%s: uninitialized switcher_sealcap", __func__));
-	KASSERT(switcher_sealcap2 != (void * __capability)-1,
-             ("%s: uninitialized switcher_sealcap2", __func__));
-	KASSERT(switcher_sealcap != switcher_sealcap2,
-             ("%s: switcher_sealcap == switcher_sealcap2", __func__));
+	KASSERT(switcher_entry_sealcap != (void * __capability)-1,
+             ("%s: uninitialized switcher_entry_sealcap", __func__));
+	KASSERT(switcher_target_sealcap != (void * __capability)-1,
+             ("%s: uninitialized switcher_target_sealcap", __func__));
+	KASSERT(switcher_entry_sealcap != switcher_target_sealcap,
+             ("%s: switcher_entry_sealcap == switcher_target_sealcap",
+             __func__));
 
 	if (td->td_scb == NULL) {
 		error = setup_scb(td);
@@ -620,12 +621,12 @@ kern_cosetup(struct thread *td, int what,
 			    td->td_proc->p_sysent->sv_cocall_base,
 			    td->td_proc->p_sysent->sv_cocall_len);
 		}
-		codecap = cheri_seal(codecap, switcher_sealcap);
+		codecap = cheri_seal(codecap, switcher_entry_sealcap);
 		error = sucap(codep, (intcap_t)codecap) == 0 ? 0 : EFAULT;
 		if (error != 0)
 			return (error);
 
-		datacap = cheri_seal(td->td_scb, switcher_sealcap);
+		datacap = cheri_seal(td->td_scb, switcher_entry_sealcap);
 		error = sucap(datap, (intcap_t)datacap) == 0 ? 0 : EFAULT;
 		return (error);
 
@@ -638,12 +639,12 @@ kern_cosetup(struct thread *td, int what,
 			    td->td_proc->p_sysent->sv_coaccept_base,
 			    td->td_proc->p_sysent->sv_coaccept_len);
 		}
-		codecap = cheri_seal(codecap, switcher_sealcap);
+		codecap = cheri_seal(codecap, switcher_entry_sealcap);
 		error = sucap(codep, (intcap_t)codecap) == 0 ? 0 : EFAULT;
 		if (error != 0)
 			return (error);
 
-		datacap = cheri_seal(td->td_scb, switcher_sealcap);
+		datacap = cheri_seal(td->td_scb, switcher_entry_sealcap);
 		error = sucap(datap, (intcap_t)datacap) == 0 ? 0 : EFAULT;
 		return (error);
 
@@ -702,7 +703,7 @@ kern_coregister(struct thread *td, const char * __capability namep,
 			return (error);
 	}
 
-	target = cheri_seal(td->td_scb, switcher_sealcap2);
+	target = cheri_seal(td->td_scb, switcher_target_sealcap);
 
 	if (capp != NULL) {
 		error = sucap(capp, (intcap_t)target) == 0 ? 0 : EFAULT;
@@ -880,14 +881,15 @@ kern_cocall_slow(void * __capability target,
 		COLOCATION_DEBUG("unsealed target %#lp; returning EINVAL", target);
 		return (EINVAL);
 	}
-	if (cheri_gettype(target) == cheri_gettype(switcher_sealcap2)) {
+	if (cheri_gettype(target) == cheri_gettype(switcher_target_sealcap)) {
 		COLOCATION_DEBUG("target %#lp type %lu != %#lp type %lu; returning EINVAL",
 		    target, cheri_gettype(target),
-		    switcher_sealcap2, cheri_gettype(switcher_sealcap2));
+		    switcher_target_sealcap,
+		    cheri_gettype(switcher_target_sealcap));
 		return (EINVAL);
 	}
 
-	targetcap = cheri_unseal(target, switcher_sealcap2);
+	targetcap = cheri_unseal(target, switcher_target_sealcap);
 
 	SWITCHER_LOCK();
 	COLOCATION_DEBUG("starting with callee %#lp", targetcap);
@@ -1141,10 +1143,10 @@ sys_capfromfd(struct thread *td, struct capfromfd_args *uap)
 
 	KASSERT(capfd_sealcap != (void * __capability)-1,
              ("%s: uninitialized capfd_sealcap", __func__));
-	KASSERT(capfd_sealcap != switcher_sealcap,
-             ("%s: capfd_sealcap == switcher_sealcap", __func__));
-	KASSERT(capfd_sealcap != switcher_sealcap2,
-             ("%s: capfd_sealcap == switcher_sealcap2", __func__));
+	KASSERT(capfd_sealcap != switcher_entry_sealcap,
+             ("%s: capfd_sealcap == switcher_entry_sealcap", __func__));
+	KASSERT(capfd_sealcap != switcher_target_sealcap,
+             ("%s: capfd_sealcap == switcher_target_sealcap", __func__));
 
 	error = fget(curthread, uap->fd, cap_rights_init_one(&rights, CAP_SOCK_CLIENT), &fp);
 	if (error != 0) {
@@ -1236,7 +1238,8 @@ db_print_scb(struct thread *td, struct switchercb *scbp)
 	db_print_cap(td, "    scb_callee_scb:    ", scbp->scb_callee_scb);
 	db_print_cap(td, "    scb_home_td:       ", scbp->scb_home_td);
 	db_print_cap(td, "    scb_borrower_td:   ", scbp->scb_borrower_td);
-	db_print_cap(td, "    scb_unsealcap:     ", scbp->scb_unsealcap);
+	db_print_cap(td, "    scb_target_unsealcap: ",
+	    scbp->scb_target_unsealcap);
 	db_print_cap(td, "    scb_csp:           ", scbp->scb_csp);
 	db_print_cap(td, "    scb_cra:           ", scbp->scb_cra);
 	db_print_cap(td, "    scb_cookiep (ca2): ", scbp->scb_cookiep);
