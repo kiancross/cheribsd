@@ -471,16 +471,16 @@ struct oquota_args {
 };
 struct coexecve_args {
 	char pid_l_[PADL_(pid_t)]; pid_t pid; char pid_r_[PADR_(pid_t)];
-	char fname_l_[PADL_(const char * __capability)]; const char * __capability fname; char fname_r_[PADR_(const char * __capability)];
-	char argv_l_[PADL_(char * __capability * __capability)]; char * __capability * __capability argv; char argv_r_[PADR_(char * __capability * __capability)];
-	char envv_l_[PADL_(char * __capability * __capability)]; char * __capability * __capability envv; char envv_r_[PADR_(char * __capability * __capability)];
+	char fname_l_[PADL_(const char * __kerncap)]; const char * __kerncap fname; char fname_r_[PADR_(const char * __kerncap)];
+	char argv_l_[PADL_(char * __kerncap * __kerncap)]; char * __kerncap * __kerncap argv; char argv_r_[PADR_(char * __kerncap * __kerncap)];
+	char envv_l_[PADL_(char * __kerncap * __kerncap)]; char * __kerncap * __kerncap envv; char envv_r_[PADR_(char * __kerncap * __kerncap)];
 };
 struct coexecvec_args {
 	char pid_l_[PADL_(pid_t)]; pid_t pid; char pid_r_[PADR_(pid_t)];
-	char fname_l_[PADL_(const char * __capability)]; const char * __capability fname; char fname_r_[PADR_(const char * __capability)];
-	char argv_l_[PADL_(char * __capability * __capability)]; char * __capability * __capability argv; char argv_r_[PADR_(char * __capability * __capability)];
-	char envv_l_[PADL_(char * __capability * __capability)]; char * __capability * __capability envv; char envv_r_[PADR_(char * __capability * __capability)];
-	char capv_l_[PADL_(char * __capability __capability * __capability)]; char * __capability __capability * __capability capv; char capv_r_[PADR_(char * __capability __capability * __capability)];
+	char fname_l_[PADL_(const char * __kerncap)]; const char * __kerncap fname; char fname_r_[PADR_(const char * __kerncap)];
+	char argv_l_[PADL_(char * __kerncap * __kerncap)]; char * __kerncap * __kerncap argv; char argv_r_[PADR_(char * __kerncap * __kerncap)];
+	char envv_l_[PADL_(char * __kerncap * __kerncap)]; char * __kerncap * __kerncap envv; char envv_r_[PADR_(char * __kerncap * __kerncap)];
+	char capv_l_[PADL_(char * __kerncap __capability * __kerncap)]; char * __kerncap __capability * __kerncap capv; char capv_r_[PADR_(char * __kerncap __capability * __kerncap)];
 	char capc_l_[PADL_(int)]; int capc; char capc_r_[PADR_(int)];
 };
 struct nlm_syscall_args {
@@ -511,12 +511,12 @@ struct rtprio_args {
 	char rtp_l_[PADL_(struct rtprio * __kerncap)]; struct rtprio * __kerncap rtp; char rtp_r_[PADR_(struct rtprio * __kerncap)];
 };
 struct capfromfd_args {
-	char capp_l_[PADL_(void * __capability __capability * __capability)]; void * __capability __capability * __capability capp; char capp_r_[PADR_(void * __capability __capability * __capability)];
+	char capp_l_[PADL_(void * __kerncap __capability * __kerncap)]; void * __kerncap __capability * __kerncap capp; char capp_r_[PADR_(void * __kerncap __capability * __kerncap)];
 	char fd_l_[PADL_(int)]; int fd; char fd_r_[PADR_(int)];
 };
 struct captofd_args {
-	char cap_l_[PADL_(void * __capability __capability)]; void * __capability __capability cap; char cap_r_[PADR_(void * __capability __capability)];
-	char fdp_l_[PADL_(int * __capability)]; int * __capability fdp; char fdp_r_[PADR_(int * __capability)];
+	char cap_l_[PADL_(void * __kerncap __capability)]; void * __kerncap __capability cap; char cap_r_[PADR_(void * __kerncap __capability)];
+	char fdp_l_[PADL_(int * __kerncap)]; int * __kerncap fdp; char fdp_r_[PADR_(int * __kerncap)];
 };
 struct semsys_args {
 	char which_l_[PADL_(int)]; int which; char which_r_[PADR_(int)];
@@ -547,16 +547,16 @@ struct ntp_adjtime_args {
 };
 struct _cosetup_args {
 	char what_l_[PADL_(int)]; int what; char what_r_[PADR_(int)];
-	char code_l_[PADL_(void * __capability __capability * __capability)]; void * __capability __capability * __capability code; char code_r_[PADR_(void * __capability __capability * __capability)];
-	char data_l_[PADL_(void * __capability __capability * __capability)]; void * __capability __capability * __capability data; char data_r_[PADR_(void * __capability __capability * __capability)];
+	char code_l_[PADL_(void * __kerncap __capability * __kerncap)]; void * __kerncap __capability * __kerncap code; char code_r_[PADR_(void * __kerncap __capability * __kerncap)];
+	char data_l_[PADL_(void * __kerncap __capability * __kerncap)]; void * __kerncap __capability * __kerncap data; char data_r_[PADR_(void * __kerncap __capability * __kerncap)];
 };
 struct coregister_args {
-	char name_l_[PADL_(const char * __capability)]; const char * __capability name; char name_r_[PADR_(const char * __capability)];
-	char cap_l_[PADL_(void * __capability __capability * __capability)]; void * __capability __capability * __capability cap; char cap_r_[PADR_(void * __capability __capability * __capability)];
+	char name_l_[PADL_(const char * __kerncap)]; const char * __kerncap name; char name_r_[PADR_(const char * __kerncap)];
+	char cap_l_[PADL_(void * __kerncap __capability * __kerncap)]; void * __kerncap __capability * __kerncap cap; char cap_r_[PADR_(void * __kerncap __capability * __kerncap)];
 };
 struct colookup_args {
-	char name_l_[PADL_(const char * __capability)]; const char * __capability name; char name_r_[PADR_(const char * __capability)];
-	char cap_l_[PADL_(void * __capability __capability * __capability)]; void * __capability __capability * __capability cap; char cap_r_[PADR_(void * __capability __capability * __capability)];
+	char name_l_[PADL_(const char * __kerncap)]; const char * __kerncap name; char name_r_[PADR_(const char * __kerncap)];
+	char cap_l_[PADL_(void * __kerncap __capability * __kerncap)]; void * __kerncap __capability * __kerncap cap; char cap_r_[PADR_(void * __kerncap __capability * __kerncap)];
 };
 struct copark_args {
 	syscallarg_t dummy;
@@ -579,7 +579,7 @@ struct fpathconf_args {
 	char name_l_[PADL_(int)]; int name; char name_r_[PADR_(int)];
 };
 struct cogetpid_args {
-	char pidp_l_[PADL_(pid_t * __capability)]; pid_t * __capability pidp; char pidp_r_[PADR_(pid_t * __capability)];
+	char pidp_l_[PADL_(pid_t * __kerncap)]; pid_t * __kerncap pidp; char pidp_r_[PADR_(pid_t * __kerncap)];
 };
 struct getrlimit_args {
 	char which_l_[PADL_(u_int)]; u_int which; char which_r_[PADR_(u_int)];
@@ -1739,17 +1739,17 @@ struct utimensat_args {
 	char flag_l_[PADL_(int)]; int flag; char flag_r_[PADR_(int)];
 };
 struct cocall_slow_args {
-	char target_l_[PADL_(void * __capability __capability)]; void * __capability __capability target; char target_r_[PADR_(void * __capability __capability)];
-	char outbuf_l_[PADL_(const void * __capability __capability)]; const void * __capability __capability outbuf; char outbuf_r_[PADR_(const void * __capability __capability)];
+	char target_l_[PADL_(void * __kerncap __capability)]; void * __kerncap __capability target; char target_r_[PADR_(void * __kerncap __capability)];
+	char outbuf_l_[PADL_(const void * __kerncap __capability)]; const void * __kerncap __capability outbuf; char outbuf_r_[PADR_(const void * __kerncap __capability)];
 	char outlen_l_[PADL_(size_t)]; size_t outlen; char outlen_r_[PADR_(size_t)];
-	char inbuf_l_[PADL_(void * __capability __capability)]; void * __capability __capability inbuf; char inbuf_r_[PADR_(void * __capability __capability)];
+	char inbuf_l_[PADL_(void * __kerncap __capability)]; void * __kerncap __capability inbuf; char inbuf_r_[PADR_(void * __kerncap __capability)];
 	char inlen_l_[PADL_(size_t)]; size_t inlen; char inlen_r_[PADR_(size_t)];
 };
 struct coaccept_slow_args {
-	char cookiep_l_[PADL_(void * __capability __capability * __capability)]; void * __capability __capability * __capability cookiep; char cookiep_r_[PADR_(void * __capability __capability * __capability)];
-	char outbuf_l_[PADL_(const void * __capability __capability)]; const void * __capability __capability outbuf; char outbuf_r_[PADR_(const void * __capability __capability)];
+	char cookiep_l_[PADL_(void * __kerncap __capability * __kerncap)]; void * __kerncap __capability * __kerncap cookiep; char cookiep_r_[PADR_(void * __kerncap __capability * __kerncap)];
+	char outbuf_l_[PADL_(const void * __kerncap __capability)]; const void * __kerncap __capability outbuf; char outbuf_r_[PADR_(const void * __kerncap __capability)];
 	char outlen_l_[PADL_(size_t)]; size_t outlen; char outlen_r_[PADR_(size_t)];
-	char inbuf_l_[PADL_(void * __capability __capability)]; void * __capability __capability inbuf; char inbuf_r_[PADR_(void * __capability __capability)];
+	char inbuf_l_[PADL_(void * __kerncap __capability)]; void * __kerncap __capability inbuf; char inbuf_r_[PADR_(void * __kerncap __capability)];
 	char inlen_l_[PADL_(size_t)]; size_t inlen; char inlen_r_[PADR_(size_t)];
 };
 struct fdatasync_args {
