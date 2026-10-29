@@ -796,7 +796,11 @@ struct proc {
 	void * __capability	*p_capv;
 	const void 		*p_capv_vmspace;
 
-	ssize_t			p_cocall_received;
+	/*
+	 * Slow-path cocall return value: bytes copied to the caller, or a
+	 * negated errno.
+	 */
+	ssize_t			p_cocall_slow_retval;
 };
 
 #define	p_session	p_pgrp->pg_session
