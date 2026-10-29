@@ -833,7 +833,7 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 	case EXCP_SVC32:
 	case EXCP_SVC64:
 #if __has_feature(capabilities)
-		colocation_unborrow(td);
+		colocation_vacate(td);
 #endif
 		svc_handler(td, frame);
 		break;
