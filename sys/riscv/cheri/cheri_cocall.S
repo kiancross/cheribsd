@@ -72,7 +72,7 @@ SIGCODE(switcher_cocall)
 	/*
 	 * Unseal the callee's control block.
 	 */
-	clc	callee, SCB_UNSEALCAP(caller)	/* Load the unsealing capability */
+	clc	callee, SCB_TARGET_UNSEALCAP(caller)
 	cunseal	callee, ca2, callee		/* Unseal the callee control block */
 
 	/*

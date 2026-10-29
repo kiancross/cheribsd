@@ -72,7 +72,7 @@ struct switchercb {
 	/*
 	 * Capability to unseal peer context.
 	 */
-	void * __capability			scb_unsealcap;
+	void * __capability			scb_target_unsealcap;
 
 	/*
 	 * Floating point.  The reason for this being here and not
