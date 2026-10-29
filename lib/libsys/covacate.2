@@ -1,0 +1,118 @@
+.\"-
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Copyright (c) 2026 Kian Cross
+.\"
+.\" This software was developed by SRI International, the University of
+.\" Cambridge Computer Laboratory (Department of Computer Science and
+.\" Technology), and Capabilities Limited under Defense Advanced Research
+.\" Projects Agency / Air Force Research Laboratory (DARPA/AFRL) Contract
+.\" No. FA8750-24-C-B047 ("DEC"), with additional support from a grant
+.\" from Google, Inc., and the Jesus College Embiricos Trust Scholarship.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd October 30, 2026
+.Dt COVACATE 2
+.Os
+.Sh NAME
+.Nm covacate
+.Nd leave the calling thread vacant until its code comes back
+.Sh LIBRARY
+.Lb libc
+.Sh SYNOPSIS
+.Ft int
+.Fn covacate void
+.Sh DESCRIPTION
+The
+.Fn covacate
+system call blocks the calling thread until the thread's own code comes
+back to it.
+Until then, the thread is vacant.
+It is part of the colocated call mechanism of
+.Xr cocall 2
+and
+.Xr coaccept 2 ,
+and programs do not call it directly.
+.Pp
+A cocall runs the callee's code on the caller's thread.
+When
+.Xr coaccept 2
+has no caller to reply to, as on its first call, it saves the callee's
+registers for the next cocall to restore, and then calls
+.Fn covacate .
+The callee's thread stays in
+.Fn covacate
+while the callee's code runs on callers' threads.
+.Pp
+Suppose that process A cocalls process B, and that B's code
+then makes a system call on A's thread.
+The system call must run on B's thread, as B's process.
+The kernel swaps the saved user registers of the two threads, so that B's
+thread holds B's system call and A's thread holds B's call to
+.Fn covacate .
+The kernel then wakes B's thread, which makes the system call.
+A's thread is now in
+.Fn covacate ,
+and stays vacant until A's code comes back to it.
+.Sh RETURN VALUES
+When the thread's code comes back,
+.Fn covacate
+does not return.
+Instead, the thread runs that code from where it stopped on the other thread.
+In the example above, B's thread makes the system call that B's code made on
+A's thread.
+If a signal interrupts the wait,
+.Fn covacate
+returns -1 and sets the global variable
+.Va errno
+to indicate the error.
+.Sh ERRORS
+The
+.Fn covacate
+system call will fail if:
+.Bl -tag -width Er
+.It Bq Er EINTR
+A signal interrupted the wait.
+.El
+.Sh SEE ALSO
+.Xr coaccept 2 ,
+.Xr cocall 2
+.Sh HISTORY
+The
+.Fn covacate
+system call first appeared in CheriBSD, named
+.Fn copark .
+.Sh AUTHORS
+.An -nosplit
+The
+.Fn covacate
+system call was created by
+.An Edward Tomasz Napierala Aq Mt trasz@FreeBSD.org
+at the University of Cambridge Computer Laboratory under DARPA/AFRL contract
+(FA8750-10-C-0237) ("CTSRD"), as part of the DARPA CRASH research programme.
+This manual page was written by
+.An Kian Cross Aq Mt kian.cross@cl.cam.ac.uk
+at the University of Cambridge Computer Laboratory (Department of Computer
+Science and Technology) under DARPA/AFRL contract (FA8750-24-C-B047) ("DEC"),
+with additional support from a grant from Google, Inc., and the Jesus College
+Embiricos Trust Scholarship.
