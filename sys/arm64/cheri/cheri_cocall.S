@@ -46,13 +46,13 @@
  * The switchercb is pointed to by c29 (caller) and, later on, c8 (callee).
  */
 
-#define	SIGCODE(sym)						\
+#define	SWITCHER_ENTRY(sym)					\
 	.section .rodata; .globl sym; .type sym,@object; .align 4; sym: .cfi_startproc; BTI_C
 
-#define CSYM(x)							\
+#define	SWITCHER_MARKER(x)					\
 	.globl x; .type x,@object; x:
 
-SIGCODE(switcher_cocall)
+SWITCHER_ENTRY(switcher_cocall)
 	/*
 	 * Save the caller's CPU context in the caller's control block.
 	 *
@@ -111,7 +111,7 @@ SIGCODE(switcher_cocall)
 	 * context.
 	 */
 	str	c8, SCB_CALLEE_SCB(c29)
-1:
+.Ltake_lock:
 #ifdef notyet
 	/*
 	 * Save the capability to the caller's control block in the callee
@@ -119,16 +119,16 @@ SIGCODE(switcher_cocall)
 	 */
 	clr.c	c9, (c8)
 	cgettag	x10, c9
-	bnez	x10, 10f
+	bnez	x10, .Llock_busy
 	csc.c	x11, c29, (c8)
-	beqz	x11, 1b
+	beqz	x11, .Ltake_lock
 #else
 	/*
 	 * Implement a trivial almost-spinlock.
 	 */
 	ldr	c9, SCB_CALLER_SCB(c8)
 	gctag	x10, c9
-	cbnz	x10, 10f
+	cbnz	x10, .Llock_busy
 	str	c29, SCB_CALLER_SCB(c8)
 #endif
 
@@ -155,10 +155,10 @@ SIGCODE(switcher_cocall)
 	 * stripped off) where the callee wants it.
 	 */
 	ldr	c13, SCB_COOKIEP(c8)
-	cbz	x13, 2f
+	cbz	x13, .Lcookie_done
 	clrtag	c1, c1
 	str	c1, [c13]
-2:
+.Lcookie_done:
 
 	/*
 	 * Restore the callee's context.
@@ -221,18 +221,18 @@ SIGCODE(switcher_cocall)
 	 */
 	sub	x11, x4, x13
 	cmp	x11, #0
-	bge	use_coaccept_input_buffer_len
+	bge	.Lhave_copy_len
 	mov	x13, x4
-use_coaccept_input_buffer_len:
+.Lhave_copy_len:
 	mov	x14, x13
 
-CSYM(switcher_cocall_copy_start)
-copy_loop:
+SWITCHER_MARKER(switcher_cocall_copy_start)
+.Lcopy_loop:
 	add	x13, x13, #-16
 	ldr	c11, [c3, x13]
 	str	c11, [c12, x13]
-	cbnz	x13, copy_loop
-CSYM(switcher_cocall_copy_end)
+	cbnz	x13, .Lcopy_loop
+SWITCHER_MARKER(switcher_cocall_copy_end)
 
 	/*
 	 * We're returning success; clear the carry flag.
@@ -240,7 +240,7 @@ CSYM(switcher_cocall_copy_end)
 	mov	x0, 0
 	adds	x0, x0, x0
 	mov	x0, x14
-4:
+.Lreturn:
 	/* Preserve x0, which is our return value. */
 	mov	x1, 0
 	mov	x2, 0
@@ -267,7 +267,7 @@ CSYM(switcher_cocall_copy_end)
 	 * "Return" to the callee - or the caller, if returning error.
 	 */
 	rets	c30
-10:
+.Llock_busy:
 	/*
 	 * The spinlock is already taken.  Or is it?
 	 */
@@ -276,7 +276,7 @@ CSYM(switcher_cocall_copy_end)
 	/*
 	 * It is, go around.
 	 */
-	cbnz	x10, 1b
+	cbnz	x10, .Ltake_lock
 
 	/*
 	 * Nope - length zero means we need to return error encoded as offset.
@@ -284,17 +284,17 @@ CSYM(switcher_cocall_copy_end)
 	 */
 	gcoff	x0, c9
 	subs	x0, x0, #0
-	b	4b
+	b	.Lreturn
 
-CSYM(switcher_cocall_copy_onfault)
+SWITCHER_MARKER(switcher_cocall_copy_onfault)
 	/* Assumes x0 holds errno and that 'c29' points to caller's scb. */
 
 	/* Clear state in the callee's scb. */
 	ldr	c9, SCB_CALLEE_SCB(c29)
 	ldr	c10, SCB_COOKIEP(c9)
-	cbz	x10, 5f
+	cbz	x10, .Lonfault_cookie_done
 	str	czr, [c10]
-5:
+.Lonfault_cookie_done:
 	str	czr, SCB_CALLER_SCB(c9)
 
 	/* Clear state in the caller's scb. */
@@ -308,7 +308,7 @@ CSYM(switcher_cocall_copy_onfault)
 	// XXX: I have no idea how to get here.
 	brk	42
 
-	b	4b
+	b	.Lreturn
 
 END(switcher_cocall)
 

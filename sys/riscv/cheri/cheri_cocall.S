@@ -45,13 +45,13 @@
 #define	caller	ct6
 #define	callee	ct0
 
-#define	SIGCODE(sym)						\
+#define	SWITCHER_ENTRY(sym)					\
 	.text; .globl sym; .type sym,@object; .align 4; sym: .cfi_startproc
 
-#define CSYM(x)							\
+#define	SWITCHER_MARKER(x)					\
 	.globl x; .type x,@object; x:
 
-SIGCODE(switcher_cocall)
+SWITCHER_ENTRY(switcher_cocall)
 	/*
 	 * Save the caller's stack pointer and return address (PCC)
 	 * in the caller's control block.
@@ -80,7 +80,7 @@ SIGCODE(switcher_cocall)
 	 * context.
 	 */
 	csc	callee, SCB_CALLEE_SCB(caller)
-1:
+.Ltake_lock:
 #ifdef notyet
 	/*
 	 * Save the capability to the caller's control block in the callee
@@ -88,16 +88,16 @@ SIGCODE(switcher_cocall)
 	 */
 	clr.c	ct1, (callee)
 	cgettag	t2, ct1
-	bnez	t2, 10f
+	bnez	t2, .Llock_busy
 	csc.c	ct3, caller, (callee)
-	beqz	t3, 1b
+	beqz	t3, .Ltake_lock
 #else
 	/*
 	 * Implement a trivial almost-spinlock.
 	 */
 	clc	ct1, SCB_CALLER_SCB(callee)
 	cgettag	t2, ct1
-	bnez	t2, 10f
+	bnez	t2, .Llock_busy
 	csc	caller, SCB_CALLER_SCB(callee)
 #endif
 
@@ -124,10 +124,10 @@ SIGCODE(switcher_cocall)
 	 * stripped off) where the callee wants it.
 	 */
 	clc	ct5, SCB_COOKIEP(callee)
-	beqz	t5, 2f
+	beqz	t5, .Lcookie_done
 	ccleartag	ca1, ca1
 	csc	ca1, 0(ct5)
-2:
+.Lcookie_done:
 
 	/*
 	 * Restore the callee's context.
@@ -148,23 +148,23 @@ SIGCODE(switcher_cocall)
 	 */
 	sub	t3, a4, t5
 	mv	a0, t5
-	bgez	t3, 3f
+	bgez	t3, .Lcopy_loop
 	mv	t5, a4
 	mv	a0, a4
 
-CSYM(switcher_cocall_copy_start)
-3:
+SWITCHER_MARKER(switcher_cocall_copy_start)
+.Lcopy_loop:
 	clc	ct2, 0(ca3)
 	csc	ct2, 0(ct4)
 	cincoffset ca3, ca3, CHERICAP_SIZE
 	cincoffset ct4, ct4, CHERICAP_SIZE
 	addi	t5, t5, -CHERICAP_SIZE
-	bgtz	t5, 3b
-CSYM(switcher_cocall_copy_end)
+	bgtz	t5, .Lcopy_loop
+SWITCHER_MARKER(switcher_cocall_copy_end)
 
 	li	t0, 0
 
-4:
+.Lreturn:
 	/*
 	 * XXX: We should use cclear here, but until it's supported in qemu, let's just...
 	 */
@@ -203,7 +203,7 @@ CSYM(switcher_cocall_copy_end)
 	 * "Return" to the callee - or the caller, if returning error.
 	 */
 	cret
-10:
+.Llock_busy:
 	/*
 	 * The spinlock is already taken.  Or is it?
 	 */
@@ -212,7 +212,7 @@ CSYM(switcher_cocall_copy_end)
 	/*
 	 * It is, go around.
 	 */
-	bnez	t2, 1b
+	bnez	t2, .Ltake_lock
 	nop
 
 	/*
@@ -220,17 +220,17 @@ CSYM(switcher_cocall_copy_end)
 	 */
 	cgetoffset	a0, ct1
 	li	t0, 1
-	j	4b
+	j	.Lreturn
 
-CSYM(switcher_cocall_copy_onfault)
+SWITCHER_MARKER(switcher_cocall_copy_onfault)
 	/* Assumes a0 holds errno. */
 
 	/* Clear state in the callee's scb. */
 	clc	ct1, SCB_CALLEE_SCB(caller)
 	clc	ct2, SCB_COOKIEP(ct1)
-	beqz	t2, 5f
+	beqz	t2, .Lonfault_cookie_done
 	csc	cnull, (ct2)
-5:
+.Lonfault_cookie_done:
 	csc	cnull, SCB_CALLER_SCB(ct1)
 
 	/* Clear state in the caller's scb. */
@@ -241,7 +241,7 @@ CSYM(switcher_cocall_copy_onfault)
 	clc	cra, SCB_CRA(caller)
 
 	li	t0, 1
-	j	4b
+	j	.Lreturn
 
 END(switcher_cocall)
 

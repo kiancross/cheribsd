@@ -53,13 +53,13 @@
  *
  */
 
-#define	SIGCODE(sym)						\
+#define	SWITCHER_ENTRY(sym)					\
 	.section .rodata; .globl sym; .type sym,@object; .align 4; sym: .cfi_startproc; BTI_C
 
-#define CSYM(x)							\
+#define	SWITCHER_MARKER(x)					\
 	.globl x; .type x,@object; x:
 
-SIGCODE(switcher_coaccept)
+SWITCHER_ENTRY(switcher_coaccept)
 	/*
 	 * Save the callee's CPU context in the callee's control block.
 	 *
@@ -122,7 +122,7 @@ SIGCODE(switcher_coaccept)
 	 * for a ccall()?  If the former - call covacate(2).
 	 */
 	gclen	x9, c8
-	cbnz	x9, 1f
+	cbnz	x9, .Lhave_caller
 	str	czr, SCB_CALLER_SCB(c29)
 	mov	x8, SYS_covacate
 	svc	#0
@@ -132,9 +132,9 @@ SIGCODE(switcher_coaccept)
 	 *
 	 * XXX: Wait for the spinlock to be released.
 	 */
-	b	3f
+	b	.Lreturn
 
-1:
+.Lhave_caller:
 	/*
 	 * If scb_borrower_td in the caller's scb is NULL, then
 	 * the current thread is the callee thread and is going
@@ -218,16 +218,16 @@ SIGCODE(switcher_coaccept)
 	 */
 	sub	x11, x4, x13
 	cmp	x11, #0
-	bge	use_cocall_output_buffer_len
+	bge	.Lhave_copy_len
 	mov	x13, x4
-use_cocall_output_buffer_len:
+.Lhave_copy_len:
 	mov	x14, x13
 
-copy_loop:
+.Lcopy_loop:
 	add	x13, x13, #-16
 	ldr	c11, [c3, x13]
 	str	c11, [c12, x13]
-	cbnz	x13, copy_loop
+	cbnz	x13, .Lcopy_loop
 
 	/*
 	 * Zero out the scb_peer_scb variables, releasing the spinlock.
@@ -241,7 +241,7 @@ copy_loop:
 	mov	x0, 0
 	adds	x0, x0, x0
 	mov	x0, x14
-3:
+.Lreturn:
 	/* Preserve x0, which is our return value. */
 	mov	x1, 0
 	mov	x2, 0

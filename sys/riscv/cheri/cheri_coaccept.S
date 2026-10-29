@@ -53,13 +53,13 @@
 #define	caller	ct0
 #define	callee	ct6
 
-#define	SIGCODE(sym)						\
+#define	SWITCHER_ENTRY(sym)					\
 	.text; .globl sym; .type sym,@object; .align 4; sym: .cfi_startproc
 
-#define CSYM(x)							\
+#define	SWITCHER_MARKER(x)					\
 	.globl x; .type x,@object; x:
 
-SIGCODE(switcher_coaccept)
+SWITCHER_ENTRY(switcher_coaccept)
 	/*
 	 * Save the callee's stack pointer and return address (PCC)
 	 * in the callee's control block.
@@ -92,7 +92,7 @@ SIGCODE(switcher_coaccept)
 	 * for a ccall()?  If the former - call covacate(2).
 	 */
 	cgetlen	t1, caller
-	bnez	t1, 1f
+	bnez	t1, .Lhave_caller
 	csc	cnull, SCB_CALLER_SCB(callee)
 	li	t0, SYS_covacate
 	ecall
@@ -102,9 +102,9 @@ SIGCODE(switcher_coaccept)
 	 *
 	 * XXX: Wait for the spinlock to be released.
 	 */
-	j	3f
+	j	.Lreturn
 
-1:
+.Lhave_caller:
 	/*
 	 * If scb_borrower_td in the caller's scb is NULL, then
 	 * the current thread is the callee thread and is going
@@ -143,17 +143,17 @@ SIGCODE(switcher_coaccept)
 	 */
 	sub	t3, a4, t5
 	mv	a0, t5
-	bgez	t3, 2f
+	bgez	t3, .Lcopy_loop
 	mv	t5, a4
 	mv	a0, a4
 
-2:
+.Lcopy_loop:
 	clc	ct2, 0(ca3)
 	csc	ct2, 0(ct4)
 	cincoffset ca3, ca3, CHERICAP_SIZE
 	cincoffset ct4, ct4, CHERICAP_SIZE
 	addi	t5, t5, -CHERICAP_SIZE
-	bgtz	t5, 2b
+	bgtz	t5, .Lcopy_loop
 
 	/*
 	 * Zero out the scb_peer_scb variables, releasing the spinlock.
@@ -163,7 +163,7 @@ SIGCODE(switcher_coaccept)
 
 	li	t0, 0
 
-3:
+.Lreturn:
 	/*
 	 * XXX: We should use cclear here, but until it's supported in qemu, let's just...
 	 */
