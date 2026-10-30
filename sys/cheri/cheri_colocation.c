@@ -38,6 +38,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
+#include <sys/limits.h>
 #include <sys/mman.h>
 #include <sys/proc.h>
 #include <sys/sx.h>
@@ -60,6 +61,9 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 
 #include <machine/pcb.h>
+#ifdef __aarch64__
+#include <machine/vfp.h>
+#endif
 
 #ifdef DDB
 #include <ddb/ddb.h>
@@ -335,6 +339,39 @@ colocation_thread_exit(struct thread *td)
 	td->td_scb = NULL;
 }
 
+#ifdef __aarch64__
+/*
+ * Swap the userspace FP state of td, the current thread, with that of
+ * hometd, which must have switched out so that its state is in its pcb.
+ * The trapframe does not hold the FP registers, and the low halves of
+ * q8-q15 are callee-saved, so userspace may keep values in them across a
+ * syscall.
+ *
+ * The kernel saves FP state lazily, so td's state may still be in the
+ * registers.  vfp_save_state() saves it and disables the FP unit, so that
+ * the switch out of td does not save the registers over the state swapped
+ * in.  Both pcb_vfpcpu fields are reset because vfp_restore_state_common()
+ * skips the reload when the thread was the last to use the FP unit of the
+ * CPU it runs on.
+ */
+static void
+colocation_swap_fp(struct thread *td, struct thread *hometd)
+{
+	struct vfpstate fptmp;
+
+	KASSERT((td->td_pcb->pcb_fpflags & PCB_FP_SVEVALID) == 0 &&
+	    (hometd->td_pcb->pcb_fpflags & PCB_FP_SVEVALID) == 0,
+	    ("%s: SVE state is not swapped", __func__));
+
+	vfp_save_state(td, td->td_pcb);
+	fptmp = *td->td_pcb->pcb_fpusaved;
+	*td->td_pcb->pcb_fpusaved = *hometd->td_pcb->pcb_fpusaved;
+	*hometd->td_pcb->pcb_fpusaved = fptmp;
+	td->td_pcb->pcb_vfpcpu = UINT_MAX;
+	hometd->td_pcb->pcb_vfpcpu = UINT_MAX;
+}
+#endif
+
 /*
  * Assign our trapframe (userspace context) to the thread waiting
  * in covacate(2) and wake it up; it'll return to userspace with ERESTART
@@ -408,6 +445,9 @@ colocation_vacate(struct thread *td)
 	memcpy(&hometrapframe, hometd->td_frame, sizeof(struct trapframe));
 	memcpy(hometd->td_frame, td->td_frame, sizeof(struct trapframe));
 	memcpy(td->td_frame, &hometrapframe, sizeof(struct trapframe));
+#ifdef __aarch64__
+	colocation_swap_fp(td, hometd);
+#endif
 
 	/*
 	 * Wake up the other thread, which should return with ERESTART,

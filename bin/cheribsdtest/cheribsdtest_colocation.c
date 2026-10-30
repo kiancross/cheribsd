@@ -2518,10 +2518,7 @@ CHERIBSDTEST(colocation_q8_q15_via_coaccept,
 CHERIBSDTEST(colocation_q8_q15_across_vacate,
     "Check that a callee's q8-q15 move with its code when a syscall moves "
     "the code back to its own thread",
-    .ct_child_func = colocation_q8_q15_across_vacate_callee,
-    .ct_xfail_reason =
-	"A syscall from hosted code moves its trapframe home but not its FP "
-	"registers")
+    .ct_child_func = colocation_q8_q15_across_vacate_callee)
 {
 	void *target;
 	struct fp_q_value markers[FP_MARKER_COUNT];
