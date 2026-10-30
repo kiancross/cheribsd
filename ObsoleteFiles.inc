@@ -51,6 +51,10 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20261030: dispatch(1) removed
+OLD_FILES+=usr/bin/dispatch
+OLD_FILES+=usr/share/man/man1/dispatch.1.gz
+
 # 20241023: new clang import which bumps version from 18 to 19
 OLD_FILES+=usr/lib/clang/18/include/__clang_cuda_builtin_vars.h
 OLD_FILES+=usr/lib/clang/18/include/__clang_cuda_cmath.h

@@ -29,7 +29,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd May 25, 2022
+.Dd October 30, 2026
 .Dt CLEARANCES 1
 .Os
 .Sh NAME
@@ -81,8 +81,6 @@ A safer way to implement it is by introducing a separate "minder protocol"
 between them, to carry both the state and callers’ identities.
 Yet another is to implement those policy checks in the service itself;
 this also has the advantage of not introducing additional IPC overhead.
-Then there's
-.Xr dispatch 1 .
 .Pp
 The name might make more sense if you imagine holding a capability
 as an equivalent of the need-to-know.

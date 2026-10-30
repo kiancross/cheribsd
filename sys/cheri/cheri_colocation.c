@@ -40,7 +40,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/mman.h>
 #include <sys/proc.h>
-#include <sys/priv.h>
 #include <sys/sx.h>
 #include <sys/syscall.h>
 #include <sys/syscallsubr.h>
@@ -571,20 +570,6 @@ switcher_code_cap(struct thread *td, ptraddr_t base, size_t length)
 	return (codecap);
 }
 
-static void * __capability
-rederive(const void * __capability from)
-{
-	void * __capability codecap;
-
-	codecap = cheri_capability_build_inexact_user_rwx(CHERI_CAP_USER_CODE_PERMS,
-	    cheri_getbase(from) + cheri_getoffset(from), cheri_getlength(from) - cheri_getoffset(from), 0);
-	if (SV_PROC_FLAG(curthread->td_proc, SV_CHERI))
-		codecap = cheri_capmode(codecap);
-
-	//printf("%s: %#lp -> %#lp\n", __func__, from, codecap);
-	return (codecap);
-}
-
 int
 kern_cosetup(struct thread *td, int what,
     void * __capability * __capability codep,
@@ -592,7 +577,6 @@ kern_cosetup(struct thread *td, int what,
 {
 	void * __capability codecap;
 	void * __capability datacap;
-	struct vmspace *vmspace;
 	int error;
 
 	KASSERT(switcher_entry_sealcap != (void * __capability)-1,
@@ -609,18 +593,11 @@ kern_cosetup(struct thread *td, int what,
 			return (error);
 	}
 
-	vmspace = td->td_proc->p_vmspace;
-
 	switch (what) {
 	case COSETUP_COCALL:
-		if (vmspace->vm_cocall_codecap != NULL) {
-			codecap = vmspace->vm_cocall_codecap;
-			codecap = cheri_capmode(codecap);
-		} else {
-			codecap = switcher_code_cap(td,
-			    td->td_proc->p_sysent->sv_cocall_base,
-			    td->td_proc->p_sysent->sv_cocall_len);
-		}
+		codecap = switcher_code_cap(td,
+		    td->td_proc->p_sysent->sv_cocall_base,
+		    td->td_proc->p_sysent->sv_cocall_len);
 		codecap = cheri_seal(codecap, switcher_entry_sealcap);
 		error = sucap(codep, (intcap_t)codecap) == 0 ? 0 : EFAULT;
 		if (error != 0)
@@ -631,14 +608,9 @@ kern_cosetup(struct thread *td, int what,
 		return (error);
 
 	case COSETUP_COACCEPT:
-		if (vmspace->vm_coaccept_codecap != NULL) {
-			codecap = vmspace->vm_coaccept_codecap;
-			codecap = cheri_capmode(codecap);
-		} else {
-			codecap = switcher_code_cap(td,
-			    td->td_proc->p_sysent->sv_coaccept_base,
-			    td->td_proc->p_sysent->sv_coaccept_len);
-		}
+		codecap = switcher_code_cap(td,
+		    td->td_proc->p_sysent->sv_coaccept_base,
+		    td->td_proc->p_sysent->sv_coaccept_len);
 		codecap = cheri_seal(codecap, switcher_entry_sealcap);
 		error = sucap(codep, (intcap_t)codecap) == 0 ? 0 : EFAULT;
 		if (error != 0)
@@ -648,31 +620,6 @@ kern_cosetup(struct thread *td, int what,
 		error = sucap(datap, (intcap_t)datacap) == 0 ? 0 : EFAULT;
 		return (error);
 
-	case COSETUP_TAKEOVER:
-		error = priv_check(td, PRIV_KMEM_WRITE);
-		if (error != 0) {
-			COLOCATION_DEBUG("COSETUP_TAKEOVER failing with error %d", error);
-			return (error);
-		}
-
-		if (vmspace->vm_cocall_codecap != NULL || vmspace->vm_coaccept_codecap != NULL)
-			return (EBUSY);
-
-		error = fuecap(codep, (intcap_t *)&codecap);
-		if (error != 0) {
-			COLOCATION_DEBUG("COSETUP_TAKEOVER: failed to fetch cocall cap from %#lp, error %d", codep, error);
-			return (error);
-		}
-		error = fuecap(datap, (intcap_t *)&datacap);
-		if (error != 0) {
-			COLOCATION_DEBUG("COSETUP_TAKEOVER: failed to fetch coaccept cap from %#lp, error %d", datap, error);
-			return (error);
-		}
-
-		vmspace->vm_cocall_codecap = rederive(codecap);
-		vmspace->vm_coaccept_codecap = rederive(datacap);
-
-		return (0);
 	default:
 		return (EINVAL);
 	}
