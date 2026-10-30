@@ -197,7 +197,6 @@ SUBDIR+= \
 	coregister \
 	cotrace \
 	cs \
-	dispatch \
 	paths \
 	stevie
 .endif

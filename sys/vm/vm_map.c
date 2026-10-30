@@ -418,9 +418,6 @@ vmspace_alloc(vm_pointer_t min, vm_pointer_t max, pmap_pinit_t pinit)
 	vm->vm_taddr = 0;
 	vm->vm_daddr = 0;
 #if __has_feature(capabilities)
-	vm->vm_cocall_codecap = NULL;
-	vm->vm_coaccept_codecap = NULL;
-
 	/*
 	 * CID's are allocated from 1 to avoid confusion with the
 	 * NULL CID installed in each thread at creation.
