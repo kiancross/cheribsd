@@ -353,6 +353,49 @@ ENTRY(coaccept_then_vacate_with_fp_markers)
 END(coaccept_then_vacate_with_fp_markers)
 
 /*
+ * pid_t getpid_with_fp_markers(const struct fp_q_value *markers,
+ *     struct fp_q_value *values);
+ *
+ * Loads markers[0..7] into q8-q15, makes a getpid(2) syscall, and stores
+ * q8-q15 to values[0..7] once the syscall returns.  Returns the pid.
+ */
+ENTRY(getpid_with_fp_markers)
+	sub	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+	str	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	str	REG(1), [REGN(sp), #SAVED_VALUES_OFF]
+
+	stp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	stp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 2 * Q_WIDTH)]
+	stp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 4 * Q_WIDTH)]
+	stp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 6 * Q_WIDTH)]
+
+	ldp	q8,  q9,  [REG(0)]
+	ldp	q10, q11, [REG(0), #(2 * Q_WIDTH)]
+	ldp	q12, q13, [REG(0), #(4 * Q_WIDTH)]
+	ldp	q14, q15, [REG(0), #(6 * Q_WIDTH)]
+
+	mov	x8, #SYS_getpid
+	svc	#0
+
+	/* Store q8-q15 to values before restoring the caller's q8-q15. */
+	ldr	REG(9), [REGN(sp), #SAVED_VALUES_OFF]
+	stp	q8,  q9,  [REG(9)]
+	stp	q10, q11, [REG(9), #(2 * Q_WIDTH)]
+	stp	q12, q13, [REG(9), #(4 * Q_WIDTH)]
+	stp	q14, q15, [REG(9), #(6 * Q_WIDTH)]
+
+	ldp	q8,  q9,  [REGN(sp), #SAVED_REGS_OFF]
+	ldp	q10, q11, [REGN(sp), #(SAVED_REGS_OFF + 2 * Q_WIDTH)]
+	ldp	q12, q13, [REGN(sp), #(SAVED_REGS_OFF + 4 * Q_WIDTH)]
+	ldp	q14, q15, [REGN(sp), #(SAVED_REGS_OFF + 6 * Q_WIDTH)]
+
+	ldr	REGN(lr), [REGN(sp), #SAVED_LR_OFF]
+	add	REGN(sp), REGN(sp), #FP_FRAME_SIZE
+
+	RETURN
+END(getpid_with_fp_markers)
+
+/*
  * The direct helper's frame starts like the others.  Its saved registers
  * are the caller's c19-c28, q8-q15, c29, CTPIDR_EL0, FPCR, and FPSR: it
  * loads markers into all of them but c29, which blrs overwrites with the

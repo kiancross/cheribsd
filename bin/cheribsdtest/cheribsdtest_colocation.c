@@ -2174,6 +2174,9 @@ ssize_t	coaccept_with_fp_markers(void *cookiep,
 pid_t	coaccept_then_vacate_with_fp_markers(void *cookiep,
 	    const struct fp_q_value *markers, struct fp_q_value *values);
 
+pid_t	getpid_with_fp_markers(const struct fp_q_value *markers,
+	    struct fp_q_value *values);
+
 ssize_t	coaccept_with_gp_markers(void *cookiep,
 	    void * const *markers, void **values);
 
@@ -2576,20 +2579,30 @@ CHERIBSDTEST(colocation_q8_q15_via_coaccept,
  * so they can reach TB only by moving with the code.  The pid check rules
  * out a kernel that does not move the code at all: the syscall would then
  * run as A, and the markers would stay on TA.
+ *
+ * B's reply from TB leaves A's code there, and A's next syscall moves it
+ * back to TA.  A loads the markers only then, so they can reach TA only by
+ * moving with A's code the other way.
+ *
+ *	A>B	=> {TA->B, (A)}
+ *	B@	|= {TB->B}
+ *	A<B	=> {TB->A}
+ *	A@	|= {TA->A}
  */
 CHERIBSDTEST(colocation_q8_q15_across_vacate,
     "Check that a callee's q8-q15 move with its code when a syscall moves "
-    "the code back to its own thread",
-    .ct_child_func = colocation_q8_q15_across_vacate_callee,
-    .ct_xfail_reason =
-	"A syscall from hosted code moves its trapframe home but not its FP "
-	"registers")
+    "the code back to its own thread, and that its caller's q8-q15 do the "
+    "same after the reply",
+    .ct_child_func = colocation_q8_q15_across_vacate_callee)
 {
 	void *target;
 	struct fp_q_value markers[FP_MARKER_COUNT];
+	struct fp_q_value values[FP_MARKER_COUNT];
 	struct q8_q15_across_vacate_response response;
 	intcap_t send_buf = 0;
-	pid_t pid;
+	pid_t pid, my_pid, observed_pid;
+
+	my_pid = getpid();
 
 	pid = fork();
 	if (pid == -1)
@@ -2610,6 +2623,15 @@ CHERIBSDTEST(colocation_q8_q15_across_vacate,
 
 		build_fp_markers(markers);
 		check_fp_markers(markers, response.values, "the vacate");
+
+		/* A's first syscall after the reply, while hosted on TB. */
+		observed_pid = getpid_with_fp_markers(markers, values);
+
+		CHERIBSDTEST_VERIFY2(observed_pid == my_pid,
+		    "getpid() in the test returned %d, want its own pid %d",
+		    observed_pid, my_pid);
+
+		check_fp_markers(markers, values, "the caller's vacate");
 
 		cheribsdtest_success();
 	}

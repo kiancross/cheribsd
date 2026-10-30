@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
+#include <sys/limits.h>
 #include <sys/mman.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
@@ -62,6 +63,9 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 
 #include <machine/pcb.h>
+#ifdef VFP
+#include <machine/vfp.h>
+#endif
 
 #ifdef DDB
 #include <ddb/ddb.h>
@@ -380,6 +384,49 @@ colocation_thread_exit(struct thread *td)
 	td->td_scb = NULL;
 }
 
+#ifdef VFP
+/*
+ * Swap the userspace FP state of td, the current thread, with that of
+ * hometd, which must have switched out, so that its state is in its pcb.
+ * The trapframe does not hold the FP registers, so code moved with the
+ * trapframe alone resumes with the other thread's q0-q31, FPCR, and FPSR.
+ */
+static void
+colocation_swap_fpstate(struct thread *td, struct thread *hometd)
+{
+	struct vfpstate homefpstate;
+
+	THREAD_LOCK_ASSERT(hometd, MA_OWNED);
+	KASSERT(TD_IS_SLEEPING(hometd),
+	    ("%s: home td %p has not switched out", __func__, hometd));
+	KASSERT((td->td_pcb->pcb_fpflags & PCB_FP_SVEVALID) == 0 &&
+	    (hometd->td_pcb->pcb_fpflags & PCB_FP_SVEVALID) == 0,
+	    ("%s: a thread has SVE state, which the swap does not move",
+	    __func__));
+
+	/*
+	 * The kernel saves FP state lazily, so td's state may still be in the
+	 * registers.  Save it, which also disables the FP unit, so that the
+	 * switch out of td does not save the registers over the state swapped
+	 * in.
+	 */
+	vfp_save_state(td, td->td_pcb);
+
+	homefpstate = *hometd->td_pcb->pcb_fpusaved;
+	*hometd->td_pcb->pcb_fpusaved = *td->td_pcb->pcb_fpusaved;
+	*td->td_pcb->pcb_fpusaved = homefpstate;
+
+	/*
+	 * Force each thread to reload its FP registers from its pcb, as
+	 * vfp_restore_state_common() skips the reload for a thread that was
+	 * the last to use the FP unit of the CPU it runs on, and that thread
+	 * would keep the registers it had before the swap.
+	 */
+	td->td_pcb->pcb_vfpcpu = UINT_MAX;
+	hometd->td_pcb->pcb_vfpcpu = UINT_MAX;
+}
+#endif
+
 static void
 colocation_rewind_syscall(struct thread *td)
 {
@@ -436,9 +483,10 @@ colocation_vacate_wait(struct thread *td, struct thread *hometd)
 /*
  * Send a guest on td's thread home when it makes a syscall, so that the
  * syscall runs on its home thread, as its own process.  The guest's
- * trapframe is swapped with that of its home thread, which waits in
- * covacate(2).  The home thread wakes, returns ERESTART, and runs the
- * syscall.  td goes on into covacate(2) on the swapped-in frame.
+ * trapframe, and on arm64 its FP state, are swapped with those of its home
+ * thread, which waits in covacate(2).  The home thread wakes, returns
+ * ERESTART, and runs the syscall.  td goes on into covacate(2) on the
+ * swapped-in frame.
  *
  * If the home thread is not waiting in covacate(2), td waits briefly and
  * returns false with the syscall rewound, so that the syscall runs again
@@ -516,8 +564,11 @@ colocation_vacate(struct thread *td)
 
 	/*
 	 * hometd's thread lock keeps it asleep until its frame has been
-	 * swapped.  covacate(2) sleeps with PCATCH, so a signal can wake
-	 * hometd first; it is then not vacant, and the vacate retries.
+	 * swapped.  TD_IS_SLEEPING, rather than TD_ON_SLEEPQ, means that it
+	 * has switched out, so its FP state is in its pcb, where
+	 * colocation_swap_fpstate() expects it.  covacate(2) sleeps with
+	 * PCATCH, so a signal can wake hometd first; it is then not vacant,
+	 * and the vacate retries.
 	 */
 	thread_lock(hometd);
 	vacant = TD_IS_SLEEPING(hometd) &&
@@ -542,6 +593,11 @@ colocation_vacate(struct thread *td)
 	memcpy(&hometrapframe, hometd->td_frame, sizeof(struct trapframe));
 	memcpy(hometd->td_frame, td->td_frame, sizeof(struct trapframe));
 	memcpy(td->td_frame, &hometrapframe, sizeof(struct trapframe));
+
+	/* XXX: RISC-V leaves the guest's FP registers behind. */
+#ifdef VFP
+	colocation_swap_fpstate(td, hometd);
+#endif
 	thread_unlock(hometd);
 
 	/*
