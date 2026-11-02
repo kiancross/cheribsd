@@ -244,7 +244,7 @@ colocation_fetch_callee_scb(struct thread *td, struct switchercb *scbp)
 }
 
 static void
-wakeupcap(const void * __capability scbcap, const char *who)
+wakeup_slow_waiters(const void * __capability scbcap, const char *who)
 {
 	const void *chan;
 
@@ -253,12 +253,8 @@ wakeupcap(const void * __capability scbcap, const char *who)
 	wakeup(chan);
 }
 
-/*
- * This function is intended to wake up threads waiting
- * on this thread's SCB.
- */
 static void
-wakeupself(void)
+wakeup_slow_callers(void)
 {
 	const void *chan;
 
@@ -323,7 +319,7 @@ colocation_thread_exit(struct thread *td)
 	/*
 	 * Wake up any thread waiting on cocall_slow(2).
 	 */
-	wakeupself();
+	wakeup_slow_callers();
 
 	COLOCATION_DEBUG("terminating thread %p, scb %lp",
 	    td, td->td_scb);
@@ -963,7 +959,7 @@ again:
 	 * return from coaccept_slow(2), call coaccept_slow(2) again,
 	 * and copy the buffer back.
 	 */
-	wakeupcap(targetcap, "callee");
+	wakeup_slow_waiters(targetcap, "callee");
 	COLOCATION_DEBUG("waiting on scb %lp", targetcap);
 	error = msleep((__cheri_fromcap const void *)targetcap,
 	    &switcher_lock, PCATCH, "cocall", 0);
@@ -977,7 +973,7 @@ again:
 	/*
 	 * Wake up other callers that might be waiting in kern_cocall_slow().
 	 */
-	wakeupcap(targetcap, "callers sleeping on callee");
+	wakeup_slow_waiters(targetcap, "callers sleeping on callee");
 	SWITCHER_UNLOCK();
 
 	retval = curproc->p_cocall_slow_retval;
@@ -1059,12 +1055,12 @@ kern_coaccept_slow(void * __capability * __capability cookiep,
 			SWITCHER_UNLOCK();
 			COLOCATION_DEBUG("copyuser error %d, waking up %lp",
 			    error, callerscb.scb_home_td->td_scb);
-			wakeupself();
+			wakeup_slow_callers();
 			return (error);
 		}
 		callerscb.scb_home_td->td_proc->p_cocall_slow_retval = copied;
 
-		wakeupself();
+		wakeup_slow_callers();
 	}
 
 again:
@@ -1099,7 +1095,7 @@ again:
 	error = copyuser(callerscb.scb_outbuf, inbuf, copied);
 	if (error != 0) {
 		COLOCATION_DEBUG("copyuser error %d", error);
-		wakeupself();
+		wakeup_slow_callers();
 		return (error);
 	}
 
@@ -1111,7 +1107,7 @@ again:
 		error = sucap(cookiep, (intcap_t)cookie) == 0 ? 0 : EFAULT;
 		if (error != 0) {
 			COLOCATION_DEBUG("sucap error %d", error);
-			wakeupself();
+			wakeup_slow_callers();
 			return (error);
 		}
 	}
