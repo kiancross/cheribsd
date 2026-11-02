@@ -1229,36 +1229,36 @@ db_print_scb(struct thread *td, struct switchercb *scbp)
 {
 
 	if (cheri_getlen(scbp->scb_caller_scb) == 0) {
-		db_printf(       "    scb_caller_scb:    <errno %lu>\n",
+		db_printf(       "    scb_caller_scb:       <errno %lu>\n",
 		    cheri_getoffset(scbp->scb_caller_scb));
 	} else {
-		db_print_cap(td, "    scb_caller_scb:    ",
+		db_print_cap(td, "    scb_caller_scb:       ",
 		    scbp->scb_caller_scb);
 	}
-	db_print_cap(td, "    scb_target_scb:    ", scbp->scb_target_scb);
-	db_print_cap(td, "    scb_home_td:       ", scbp->scb_home_td);
-	db_print_cap(td, "    scb_borrower_td:   ", scbp->scb_borrower_td);
+	db_print_cap(td, "    scb_target_scb:       ", scbp->scb_target_scb);
+	db_print_cap(td, "    scb_home_td:          ", scbp->scb_home_td);
+	db_print_cap(td, "    scb_borrower_td:      ", scbp->scb_borrower_td);
 	db_print_cap(td, "    scb_target_unsealcap: ",
 	    scbp->scb_target_unsealcap);
-	db_print_cap(td, "    scb_csp:           ", scbp->scb_csp);
-	db_print_cap(td, "    scb_cra:           ", scbp->scb_cra);
-	db_print_cap(td, "    scb_outbuf:        ", scbp->scb_outbuf);
-	db_printf(       "    scb_outlen:        %zu\n", scbp->scb_outlen);
-	db_print_cap(td, "    scb_inbuf:         ", scbp->scb_inbuf);
-	db_printf(       "    scb_inlen:         %zu\n", scbp->scb_inlen);
-	db_print_cap(td, "    scb_cookiep:       ", scbp->scb_cookiep);
+	db_print_cap(td, "    scb_csp:              ", scbp->scb_csp);
+	db_print_cap(td, "    scb_cra:              ", scbp->scb_cra);
+	db_print_cap(td, "    scb_outbuf:           ", scbp->scb_outbuf);
+	db_printf(       "    scb_outlen:           %zu\n", scbp->scb_outlen);
+	db_print_cap(td, "    scb_inbuf:            ", scbp->scb_inbuf);
+	db_printf(       "    scb_inlen:            %zu\n", scbp->scb_inlen);
+	db_print_cap(td, "    scb_cookiep:          ", scbp->scb_cookiep);
 #ifdef __aarch64__
-	db_print_cap(td, "    scb_c19:           ", scbp->scb_c19);
-	db_print_cap(td, "    scb_c20:           ", scbp->scb_c20);
-	db_print_cap(td, "    scb_c21:           ", scbp->scb_c21);
-	db_print_cap(td, "    scb_c22:           ", scbp->scb_c22);
-	db_print_cap(td, "    scb_c23:           ", scbp->scb_c23);
-	db_print_cap(td, "    scb_c24:           ", scbp->scb_c24);
-	db_print_cap(td, "    scb_c25:           ", scbp->scb_c25);
-	db_print_cap(td, "    scb_c26:           ", scbp->scb_c26);
-	db_print_cap(td, "    scb_c27:           ", scbp->scb_c27);
-	db_print_cap(td, "    scb_c28:           ", scbp->scb_c28);
-	db_print_cap(td, "    scb_tls:           ", scbp->scb_tls);
+	db_print_cap(td, "    scb_c19:              ", scbp->scb_c19);
+	db_print_cap(td, "    scb_c20:              ", scbp->scb_c20);
+	db_print_cap(td, "    scb_c21:              ", scbp->scb_c21);
+	db_print_cap(td, "    scb_c22:              ", scbp->scb_c22);
+	db_print_cap(td, "    scb_c23:              ", scbp->scb_c23);
+	db_print_cap(td, "    scb_c24:              ", scbp->scb_c24);
+	db_print_cap(td, "    scb_c25:              ", scbp->scb_c25);
+	db_print_cap(td, "    scb_c26:              ", scbp->scb_c26);
+	db_print_cap(td, "    scb_c27:              ", scbp->scb_c27);
+	db_print_cap(td, "    scb_c28:              ", scbp->scb_c28);
+	db_print_cap(td, "    scb_tls:              ", scbp->scb_tls);
 #endif
 }
 
