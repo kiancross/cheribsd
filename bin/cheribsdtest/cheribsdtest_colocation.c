@@ -1724,6 +1724,136 @@ CHERIBSDTEST(colocation_signal_while_hosted,
 	run_colocated_children(2, "signal not delivered to hosted code");
 }
 
+#define	COLOCATION_KILLED_WHILE_HOSTED_SERVICE	"colocation_killed_while_hosted"
+
+static void __dead2
+killed_while_hosted_callee(void)
+{
+	atomic_bool *ready;
+	intcap_t buf = 0;
+
+	/* The test process's cocall delivers a pointer to its flag. */
+	if (coaccept(NULL, &buf, sizeof(buf), &ready, sizeof(ready)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	/* On TA.  A syscall would move B's code off TA, so spin without one. */
+	atomic_store(ready, true);
+	for (;;)
+		;
+}
+
+/* Exit statuses with which A reports a failed check to the test process. */
+#define	KILLED_WHILE_HOSTED_NO_ENOLINK	3
+#define	KILLED_WHILE_HOSTED_WRONG_PID	4
+
+static void __dead2
+killed_while_hosted_caller(void)
+{
+	void *target;
+	intcap_t buf = 0;
+	pid_t my_pid;
+
+	my_pid = getpid();
+	target = child_wait_for_service(COLOCATION_KILLED_WHILE_HOSTED_SERVICE);
+
+	if (cocall(target, &buf, sizeof(buf), &buf, sizeof(buf)) >= 0 ||
+	    errno != ENOLINK)
+		_exit(KILLED_WHILE_HOSTED_NO_ENOLINK);
+
+	/* A's first syscall after the cocall. */
+	_exit(getpid() == my_pid ? 0 : KILLED_WHILE_HOSTED_WRONG_PID);
+}
+
+static void
+colocation_killed_while_hosted_child(void)
+{
+	if (coregister_wins(COLOCATION_KILLED_WHILE_HOSTED_SERVICE))
+		killed_while_hosted_callee();		/* callee B */
+
+	killed_while_hosted_caller();			/* caller A */
+}
+
+/*
+ * Two colocated processes share the test process P's vmspace: B is the callee
+ * and A is the caller, with kernel threads TA and TB.  P cocalls B first, to
+ * give B a pointer to the flag that B's code sets once it runs on TA.
+ *
+ *	P>B
+ *	P<B
+ *	A>B		=> {TA->B, (A)}
+ *	B is killed	|= {TA->A}
+ *
+ * Property under test: when B is killed while its code runs on TA, A's cocall
+ * fails with ENOLINK and A's next syscall runs as A.
+ */
+CHERIBSDTEST(colocation_callee_killed_while_hosted,
+    "Check that a caller gets ENOLINK from its cocall when its callee is "
+    "killed while hosted",
+    .ct_child_func = colocation_killed_while_hosted_child,
+    /*
+     * XXX: A's record still names B's exited thread, so SIGKILL cannot end
+     * A, and the fault of B's code on TA can panic the kernel.
+     */
+    .ct_check_skip = skip_known_panic,
+    .ct_xfail_reason =
+	"Killing a hosted callee does not stop its code on its caller's "
+	"thread, which faults once the callee's memory is unmapped")
+{
+	atomic_bool ready = false;
+	atomic_bool *readyp;
+	void *target;
+	intcap_t buf = 0;
+	pid_t callee, caller, waited;
+	int status;
+
+	callee = fork();
+	if (callee == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (callee == 0)
+		cheribsdtest_coexec_child();
+
+	target = wait_for_service(COLOCATION_KILLED_WHILE_HOSTED_SERVICE,
+	    callee);
+
+	readyp = &ready;
+	cocall_or_fail(target, &readyp, sizeof(readyp), &buf, sizeof(buf));
+
+	caller = fork();
+	if (caller == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (caller == 0)
+		cheribsdtest_coexec_child();
+
+	while (!atomic_load(&ready)) {
+		waited = waitpid(caller, &status, WNOHANG);
+		if (waited == -1)
+			cheribsdtest_failure_err("waitpid");
+
+		if (waited != 0)
+			cheribsdtest_failure_errx(
+			    "caller ended before its cocall: status 0x%x",
+			    status);
+
+		usleep(1000);
+	}
+
+	if (kill(callee, SIGKILL) != 0)
+		cheribsdtest_failure_err("kill");
+
+	if (waitpid(caller, &status, 0) != caller)
+		cheribsdtest_failure_err("waitpid");
+
+	CHERIBSDTEST_VERIFY2(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+	    "caller status 0x%x", status);
+
+	cheribsdtest_success();
+}
+
 #define	COLOCATION_ONE_CALLEE_SERVICE	"colocation_one_callee_at_a_time"
 
 /*
