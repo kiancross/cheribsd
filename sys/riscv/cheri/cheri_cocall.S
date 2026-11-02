@@ -79,7 +79,7 @@ SWITCHER_ENTRY(switcher_cocall)
 	 * Save the capability to the callee's control block in the caller
 	 * context.
 	 */
-	csc	callee, SCB_CALLEE_SCB(caller)
+	csc	callee, SCB_TARGET_SCB(caller)
 .Ltake_lock:
 #ifdef notyet
 	/*
@@ -226,7 +226,7 @@ SWITCHER_MARKER(switcher_cocall_copy_onfault)
 	/* Assumes a0 holds errno. */
 
 	/* Clear state in the callee's scb. */
-	clc	ct1, SCB_CALLEE_SCB(caller)
+	clc	ct1, SCB_TARGET_SCB(caller)
 	clc	ct2, SCB_COOKIEP(ct1)
 	beqz	t2, .Lonfault_cookie_done
 	csc	cnull, (ct2)
@@ -235,7 +235,7 @@ SWITCHER_MARKER(switcher_cocall_copy_onfault)
 
 	/* Clear state in the caller's scb. */
 	csd	zero, SCB_BORROWER_TD(caller)
-	csc	cnull, SCB_CALLEE_SCB(caller)
+	csc	cnull, SCB_TARGET_SCB(caller)
 
 	clc	csp, SCB_CSP(caller)
 	clc	cra, SCB_CRA(caller)

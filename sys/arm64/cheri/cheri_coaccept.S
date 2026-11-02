@@ -232,7 +232,7 @@ SWITCHER_ENTRY(switcher_coaccept)
 	/*
 	 * Zero out the scb_peer_scb variables, releasing the spinlock.
 	 */
-	str	czr, SCB_CALLEE_SCB(c8)
+	str	czr, SCB_TARGET_SCB(c8)
 	str	czr, SCB_CALLER_SCB(c29)
 
 	/*
