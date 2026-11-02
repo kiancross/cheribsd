@@ -49,7 +49,7 @@ struct switchercb {
 	/*
 	 * Callee context, context of the thread we're cocalling into.
 	 */
-	struct switchercb * __capability	scb_callee_scb;
+	struct switchercb * __capability	scb_target_scb;
 
 	/*
 	 * Thread owning the context; the same thread that called cosetup(2).

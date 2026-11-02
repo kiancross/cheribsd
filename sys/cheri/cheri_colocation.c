@@ -223,7 +223,7 @@ colocation_fetch_caller_scb(struct thread *td, struct switchercb *scbp)
 }
 
 static bool
-colocation_fetch_callee_scb(struct thread *td, struct switchercb *scbp)
+colocation_fetch_target_scb(struct thread *td, struct switchercb *scbp)
 {
 	if (td->td_scb == NULL) {
 		/*
@@ -234,15 +234,15 @@ colocation_fetch_callee_scb(struct thread *td, struct switchercb *scbp)
 
 	colocation_copyin_scb(td->td_scb, scbp);
 
-	if (cheri_gettag(scbp->scb_callee_scb) == 0 ||
-	    cheri_getlen(scbp->scb_callee_scb) == 0) {
+	if (cheri_gettag(scbp->scb_target_scb) == 0 ||
+	    cheri_getlen(scbp->scb_target_scb) == 0) {
 		/*
 		 * Not in cocall.
 		 */
 		return (false);
 	}
 
-	colocation_copyin_scb(scbp->scb_callee_scb, scbp);
+	colocation_copyin_scb(scbp->scb_target_scb, scbp);
 
 	return (true);
 }
@@ -844,9 +844,9 @@ kern_cocall_slow(void * __capability target,
     const void * __capability outbuf, size_t outlen,
     void * __capability inbuf, size_t inlen)
 {
-	struct switchercb scb, calleescb;
+	struct switchercb scb, targetscb;
 	struct switchercb * __capability targetcap;
-	struct thread *calleetd __diagused;
+	struct thread *targettd __diagused;
 	ssize_t retval;
 	int error;
 	bool have_scb;
@@ -894,7 +894,7 @@ kern_cocall_slow(void * __capability target,
 	SWITCHER_LOCK();
 	COLOCATION_DEBUG("starting with callee %#lp", targetcap);
 again:
-	colocation_copyin_scb(targetcap, &calleescb);
+	colocation_copyin_scb(targetcap, &targetscb);
 
 	/*
 	 * The protocol here is slightly different from the one used
@@ -905,13 +905,13 @@ again:
 	 * it as zero-length capability, with offset set to EPROTOTYPE.
 	 */
 
-	if (cheri_gettag(calleescb.scb_caller_scb) == 0) {
+	if (cheri_gettag(targetscb.scb_caller_scb) == 0) {
 		COLOCATION_DEBUG("callee scb %#lp is waiting on switcher cocall", targetcap);
 		SWITCHER_UNLOCK();
 		return (EPROTOTYPE);
 	}
 
-	if (cheri_getlen(calleescb.scb_caller_scb) != 0) {
+	if (cheri_getlen(targetscb.scb_caller_scb) != 0) {
 		/*
 		 * Non-zero length means there's already a cocall in progress.
 		 */
@@ -927,7 +927,7 @@ again:
 		goto again;
 	}
 
-	error = cheri_getoffset(calleescb.scb_caller_scb);
+	error = cheri_getoffset(targetscb.scb_caller_scb);
 	/*
 	 * EPROTOTYPE means we can proceed with cocall.
 	 */
@@ -939,7 +939,7 @@ again:
 
 	colocation_store_caller_scb(targetcap, curthread->td_scb);
 
-	scb.scb_callee_scb = targetcap;
+	scb.scb_target_scb = targetcap;
 	scb.scb_outbuf = outbuf;
 	scb.scb_outlen = outlen;
 	scb.scb_inbuf = inbuf;
@@ -950,8 +950,8 @@ again:
 	 */
 	colocation_store_scb(curthread, &scb);
 
-	calleetd = (__cheri_fromcap struct thread *)calleescb.scb_home_td;
-	KASSERT(calleetd != NULL, ("%s: NULL calleetd?\n", __func__));
+	targettd = (__cheri_fromcap struct thread *)targetscb.scb_home_td;
+	KASSERT(targettd != NULL, ("%s: NULL targettd?\n", __func__));
 
 	// XXX: What happens when the callee thread dies while we are here?
 	//      We need to hold it somehow.
@@ -1235,7 +1235,7 @@ db_print_scb(struct thread *td, struct switchercb *scbp)
 		db_print_cap(td, "    scb_caller_scb:    ",
 		    scbp->scb_caller_scb);
 	}
-	db_print_cap(td, "    scb_callee_scb:    ", scbp->scb_callee_scb);
+	db_print_cap(td, "    scb_target_scb:    ", scbp->scb_target_scb);
 	db_print_cap(td, "    scb_home_td:       ", scbp->scb_home_td);
 	db_print_cap(td, "    scb_borrower_td:   ", scbp->scb_borrower_td);
 	db_print_cap(td, "    scb_target_unsealcap: ",
@@ -1365,7 +1365,7 @@ DB_SHOW_COMMAND(scb, db_show_scb)
 		}
 
 		td = curthread;
-		have_scb = colocation_fetch_callee_scb(td, &scb);
+		have_scb = colocation_fetch_target_scb(td, &scb);
 		if (have_scb) {
 			if (hometd != (__cheri_fromcap struct thread *)scb.scb_home_td) {
 				td = (__cheri_fromcap struct thread *)scb.scb_home_td;

@@ -158,7 +158,7 @@ SWITCHER_ENTRY(switcher_coaccept)
 	/*
 	 * Zero out the scb_peer_scb variables, releasing the spinlock.
 	 */
-	csc	cnull, SCB_CALLEE_SCB(caller)
+	csc	cnull, SCB_TARGET_SCB(caller)
 	csc	cnull, SCB_CALLER_SCB(callee)
 
 	li	t0, 0
