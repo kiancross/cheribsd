@@ -256,12 +256,8 @@ wakeup_slow_waiters(const void * __capability scbcap, const char *who)
 static void
 wakeup_slow_callers(void)
 {
-	const void *chan;
 
-	chan = (__cheri_fromcap const void *)curthread->td_scb;
-
-	COLOCATION_DEBUG("waking up scb %p", chan);
-	wakeup(chan);
+	wakeup_slow_waiters(curthread->td_scb, "callers");
 }
 
 static void * __capability
