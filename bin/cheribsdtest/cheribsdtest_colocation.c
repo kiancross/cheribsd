@@ -1724,6 +1724,182 @@ CHERIBSDTEST(colocation_signal_while_hosted,
 	run_colocated_children(2, "signal not delivered to hosted code");
 }
 
+#define	COLOCATION_CALLEE_KILLED_SERVICE	"colocation_callee_killed"
+
+/* How long the test gives B's code to make its syscall before it checks. */
+#define	CALLEE_KILLED_WAIT_SECONDS	2
+
+/*
+ * B's exit unmaps B's code, stack, and data, so B's code on TA runs
+ * callee_killed_spin() from the test process's copy of this program, and
+ * uses this state, which is in the test process's memory.
+ */
+static struct {
+	atomic_bool	spinning;
+	atomic_bool	go;
+	_Atomic pid_t	syscall_pid;	/* what B's getpid() returned, or 0 */
+} callee_killed_state;
+
+/*
+ * Runs on TA with B's stack, which B's exit unmaps while this function runs,
+ * so nothing after the first store may touch the stack.  getpid() is a
+ * syscall stub, and the test assumes that the optimised build keeps the
+ * loops' state in registers.
+ */
+static void __dead2
+callee_killed_spin(void)
+{
+	atomic_store(&callee_killed_state.spinning, true);
+	while (!atomic_load(&callee_killed_state.go))
+		;
+
+	atomic_store(&callee_killed_state.syscall_pid, getpid());
+
+	for (;;)
+		;
+}
+
+static void __dead2
+callee_killed_callee(void)
+{
+	void (*spin)(void) __dead2;
+	intcap_t buf = 0;
+
+	/* The test process's cocall brings the code that B runs on TA. */
+	if (coaccept(NULL, &buf, sizeof(buf), &spin, sizeof(spin)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "coaccept");
+
+	spin();
+}
+
+static void
+colocation_callee_killed_child(void)
+{
+	intcap_t buf = 0;
+	void *target;
+
+	if (coregister_wins(COLOCATION_CALLEE_KILLED_SERVICE))
+		callee_killed_callee();		/* callee B */
+
+	target = child_wait_for_service(COLOCATION_CALLEE_KILLED_SERVICE);
+
+	if (cocall(target, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "cocall");
+}
+
+static bool
+callee_killed_is_in_covacate(pid_t pid)
+{
+	struct kinfo_proc kp;
+	size_t len;
+	int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, pid };
+
+	len = sizeof(kp);
+	if (sysctl(mib, nitems(mib), &kp, &len, NULL, 0) != 0)
+		cheribsdtest_failure_err("sysctl");
+
+	return (strcmp(kp.ki_wmesg, "covacate") == 0);
+}
+
+/*
+ * Two colocated processes share the test process P's vmspace: B is the callee
+ * and A is the caller, with kernel threads TA and TB.  P cocalls B first, to
+ * give B the code that it runs on TA.
+ *
+ *	P>B
+ *	P<B
+ *	A>B	=> {TA->B, (A)}
+ *	B is killed
+ *	B@	|= {TA->B, (A)}
+ *
+ * Property under test: once B is killed, its code on TA has no home to go
+ * to, so its syscall waits.  The syscall neither runs as A nor fails, TA is
+ * not left vacant in covacate(2), and SIGKILL still ends A.
+ */
+CHERIBSDTEST(colocation_callee_killed_while_hosted,
+    "Check that, when a callee is killed while hosted, its code's syscall "
+    "waits rather than running as the caller, and the caller can still be "
+    "killed",
+    .ct_child_func = colocation_callee_killed_child,
+    .ct_xfail_reason =
+	"A syscall from hosted code swaps frames with its home thread even "
+	"after that thread has exited, which leaves the hosting thread asleep "
+	"in covacate(2)")
+{
+	void (*spin)(void);
+	void *target;
+	intcap_t buf = 0;
+	pid_t callee, caller, waited;
+	int status;
+
+	/*
+	 * Binds getpid() before callee_killed_spin() runs, because rtld's lazy
+	 * binding would use B's stack.
+	 */
+	(void)getpid();
+
+	callee = fork();
+	if (callee == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (callee == 0)
+		cheribsdtest_coexec_child();
+
+	target = wait_for_service(COLOCATION_CALLEE_KILLED_SERVICE, callee);
+
+	spin = callee_killed_spin;
+	cocall_or_fail(target, &spin, sizeof(spin), &buf, sizeof(buf));
+
+	caller = fork();
+	if (caller == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (caller == 0)
+		cheribsdtest_coexec_child();
+
+	while (!atomic_load(&callee_killed_state.spinning))
+		usleep(1000);
+
+	/*
+	 * The wait puts B's exit before its code's syscall, which could
+	 * otherwise vacate to a still-live TB and run as B.  WNOWAIT leaves B a
+	 * zombie, so its pid cannot be reused before the atexit handler from
+	 * wait_for_service() sends it SIGKILL.
+	 */
+	if (kill(callee, SIGKILL) != 0)
+		cheribsdtest_failure_err("kill");
+
+	if (waitpid(callee, NULL, WNOWAIT) != callee)
+		cheribsdtest_failure_err("waitpid");
+
+	atomic_store(&callee_killed_state.go, true);
+	sleep(CALLEE_KILLED_WAIT_SECONDS);
+
+	CHERIBSDTEST_VERIFY2(atomic_load(&callee_killed_state.syscall_pid) == 0,
+	    "callee's syscall returned pid %d",
+	    atomic_load(&callee_killed_state.syscall_pid));
+
+	waited = waitpid(caller, &status, WNOHANG);
+	if (waited == -1)
+		cheribsdtest_failure_err("waitpid");
+
+	CHERIBSDTEST_VERIFY2(waited == 0, "caller exited: status 0x%x", status);
+
+	CHERIBSDTEST_VERIFY2(!callee_killed_is_in_covacate(caller),
+	    "caller's thread is vacant in covacate(2)");
+
+	if (kill(caller, SIGKILL) != 0)
+		cheribsdtest_failure_err("kill");
+
+	if (waitpid(caller, NULL, 0) != caller)
+		cheribsdtest_failure_err("waitpid");
+
+	cheribsdtest_success();
+}
+
 #define	COLOCATION_ONE_CALLEE_SERVICE	"colocation_one_callee_at_a_time"
 
 /*
