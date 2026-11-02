@@ -203,7 +203,6 @@ void	colocation_thread_exit(struct thread *td);
 void	colocation_vacate(struct thread *td);
 bool	colocation_trap_in_switcher(struct thread *td,
 	    struct trapframe *trapframe, const char *msg);
-void	colocation_update_tls(struct thread *td);
 void	db_print_td_scb(struct thread *td);
 #endif /* !_KERNEL */
 
