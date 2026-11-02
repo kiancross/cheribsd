@@ -87,6 +87,10 @@ struct sx		switcher_lock;
 #define	SWITCHER_LOCK()		sx_xlock(&switcher_lock)
 #define	SWITCHER_UNLOCK()	sx_xunlock(&switcher_lock)
 
+#define	COVACATE_WCHAN(td)	(&(td)->td_scb)
+#define	SLOW_CALL_WCHAN(targetcap)					\
+	((__cheri_fromcap const void *)(targetcap))
+
 static int colocation_debug;
 SYSCTL_INT(_debug, OID_AUTO, colocation_debug, CTLFLAG_RWTUN,
     &colocation_debug, 0, "Enable process colocation debugging");
@@ -248,7 +252,7 @@ wakeup_slow_waiters(const void * __capability scbcap, const char *who)
 {
 	const void *chan;
 
-	chan = (__cheri_fromcap const void *)scbcap;
+	chan = SLOW_CALL_WCHAN(scbcap);
 	COLOCATION_DEBUG("waking up %s scb %p", who, chan);
 	wakeup(chan);
 }
@@ -411,7 +415,7 @@ colocation_vacate(struct thread *td)
 	 * refetch its args from the updated trapframe, and then execute
 	 * whatever syscall we've just entered.
 	 */
-	wakeup(&hometd->td_scb);
+	wakeup(COVACATE_WCHAN(hometd));
 
 	/*
 	 * Continue as usual, but calling covacate(2) instead of whatever
@@ -815,7 +819,7 @@ kern_covacate(struct thread *td)
 	int error;
 
 	SWITCHER_LOCK();
-	error = msleep(&td->td_scb, &switcher_lock,
+	error = msleep(COVACATE_WCHAN(td), &switcher_lock,
 	    PPAUSE | PCATCH, "covacate", 0);
 	SWITCHER_UNLOCK();
 
@@ -910,7 +914,7 @@ again:
 		 * Non-zero length means there's already a cocall in progress.
 		 */
 		COLOCATION_DEBUG("callee is busy, waiting on %lp", targetcap);
-		error = msleep((__cheri_fromcap const void *)targetcap,
+		error = msleep(SLOW_CALL_WCHAN(targetcap),
 		    &switcher_lock, PCATCH, "cobusy", 0);
 		if (error != 0) {
 			COLOCATION_DEBUG("cobusy msleep failed with error %d",
@@ -957,7 +961,7 @@ again:
 	 */
 	wakeup_slow_waiters(targetcap, "callee");
 	COLOCATION_DEBUG("waiting on scb %lp", targetcap);
-	error = msleep((__cheri_fromcap const void *)targetcap,
+	error = msleep(SLOW_CALL_WCHAN(targetcap),
 	    &switcher_lock, PCATCH, "cocall", 0);
 	// XXX: Are we sure we are done once we wake up?
 	if (error != 0 && error != ERESTART) {
@@ -1064,7 +1068,7 @@ again:
 	 * Wait for new caller.
 	 */
 	COLOCATION_DEBUG("waiting on %lp", curthread->td_scb);
-	error = msleep((__cheri_fromcap const void *)curthread->td_scb,
+	error = msleep(SLOW_CALL_WCHAN(curthread->td_scb),
 	    &switcher_lock, PCATCH, "coaccept", 0);
 	if (error != 0) {
 		SWITCHER_UNLOCK();
