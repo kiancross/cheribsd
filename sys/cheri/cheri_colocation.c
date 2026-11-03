@@ -282,35 +282,44 @@ errno_cap(int error)
 	return (cheri_capability_build_user_rwx_unchecked(0, 0, 0, error));
 }
 
+/*
+ * Returns a capability to the SCB of the guest whose code runs on td's
+ * thread, or NULL if no guest runs there.  scbp receives td's SCB.
+ */
+static struct switchercb * __capability
+colocation_fetch_guest(struct thread *td, struct switchercb *scbp)
+{
+	struct switchercb * __capability guestcap;
+
+	if (!colocation_fetch_scb(td, scbp))
+		return (NULL);
+
+	/*
+	 * When the switcher hands a thread back to its own code, it records
+	 * the thread's own SCB as the guest.
+	 */
+	guestcap = scbp->scb_guest_scb;
+	if ((__cheri_fromcap void *)guestcap ==
+	    (__cheri_fromcap void *)td->td_scb)
+		return (NULL);
+
+	return (guestcap);
+}
+
 void
 colocation_guest_home(struct thread *td, struct thread **hometdp)
 {
-	struct switchercb scb;
-	struct thread *hometd;
-	bool have_scb;
+	struct switchercb scb, guestscb;
+	struct switchercb * __capability guestcap;
 
-	have_scb = colocation_fetch_scb(td, &scb);
-	if (!have_scb) {
+	guestcap = colocation_fetch_guest(td, &scb);
+	if (guestcap == NULL) {
 		*hometdp = NULL;
 		return;
 	}
 
-	/*
-	 * A home thread without an SCB has exited, as
-	 * colocation_thread_exit() clears td_scb, or has been reused for a
-	 * thread that has not called cosetup(2).  Either way the guest's code
-	 * has no home, and no guest is reported: td's signals are delivered,
-	 * and a fault in the guest's code goes to td's process rather than to
-	 * one that may have been reaped.  Threads are type-stable, so reading
-	 * td_scb of an exited one is safe.
-	 *
-	 * XXX: a reused thread that has called cosetup(2) is still followed.
-	 */
-	hometd = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
-	if (hometd != NULL && hometd->td_scb == NULL)
-		hometd = NULL;
-
-	*hometdp = hometd;
+	colocation_copyin_scb(guestcap, &guestscb);
+	*hometdp = (__cheri_fromcap struct thread *)guestscb.scb_home_td;
 }
 
 void
@@ -359,7 +368,7 @@ colocation_thread_exit(struct thread *td)
 	error = sucap(&tdcap->scb_home_td, (intcap_t)0);
 	KASSERT(error == 0, ("%s: sucap to %#lp failed with error %d",
 	    __func__, tdcap, error));
-	error = sucap(&tdcap->scb_borrower_td, (intcap_t)0);
+	error = sucap(&tdcap->scb_guest_scb, (intcap_t)0);
 	KASSERT(error == 0, ("%s: sucap to %#lp failed with error %d",
 	    __func__, tdcap, error));
 
@@ -402,7 +411,8 @@ colocation_swap_fp(struct thread *td, struct thread *hometd)
 /*
  * Leave the guest's code on td's thread, rewind its syscall, and drop the
  * switcher lock, so that the syscall runs again after a short wait and
- * retries the vacate.  hometd is the guest's home thread.
+ * retries the vacate.  hometd is the guest's home thread, or NULL if that
+ * thread is gone.
  */
 static bool
 colocation_vacate_wait(struct thread *td, struct thread *hometd)
@@ -413,8 +423,8 @@ colocation_vacate_wait(struct thread *td, struct thread *hometd)
 	sx_assert(&switcher_lock, SA_XLOCKED);
 
 	if (ratecheck(&lastwarn, &warninterval))
-		printf("%s: td %p, pid %d (%s): home td %p not vacant, "
-		    "retrying\n", __func__, td, td->td_proc->p_pid,
+		printf("%s: td %p, pid %d (%s): home td %p not vacant or "
+		    "gone, retrying\n", __func__, td, td->td_proc->p_pid,
 		    td->td_proc->p_comm, hometd);
 
 #if   defined(__riscv)
@@ -459,18 +469,29 @@ colocation_vacate_wait(struct thread *td, struct thread *hometd)
 bool
 colocation_vacate(struct thread *td)
 {
-	struct switchercb scb;
-	struct switchercb * __capability tdcap;
+	struct switchercb scb, guestscb;
+	struct switchercb * __capability guestcap, * __capability tdcap;
 	struct thread *hometd;
 	struct trapframe hometrapframe;
 	bool vacant;
 	int error __diagused;
 
-	if (!colocation_fetch_scb(td, &scb) || scb.scb_borrower_td == NULL)
+	guestcap = colocation_fetch_guest(td, &scb);
+	if (guestcap == NULL)
 		return (true);
 
 	SWITCHER_LOCK();
-	hometd = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
+	colocation_copyin_scb(guestcap, &guestscb);
+	hometd = (__cheri_fromcap struct thread *)guestscb.scb_home_td;
+	/*
+	 * With its home thread gone, the guest's code cannot go home and
+	 * waits as if that thread were busy.  td's process can still be
+	 * killed: ast_sig() then holds no signals back, and
+	 * colocation_vacate_wait() asks it to run.
+	 */
+	if (hometd == NULL)
+		return (colocation_vacate_wait(td, NULL));
+
 #if   defined(__riscv)
 	KASSERT(td->td_frame->tf_t[0] != SYS_covacate,
 	    ("%s: vacating for covacate(); td %p, pid %d (%s); "
@@ -489,8 +510,6 @@ colocation_vacate(struct thread *td)
 
 	KASSERT(td == (__cheri_fromcap struct thread *)scb.scb_home_td,
 	    ("%s: td %p != scb_home_td %p\n", __func__, td, (__cheri_fromcap struct thread *)scb.scb_home_td));
-	KASSERT(hometd != td,
-	    ("%s: hometd %p == td %p\n", __func__, hometd, td));
 
 	COLOCATION_DEBUG("vacating td %p, pid %d (%s), switchercb %lp, "
 	    "to td %p, pid %d (%s), switchercb %lp",
@@ -509,7 +528,12 @@ colocation_vacate(struct thread *td)
 	 * colocation_swap_fp() expects it.  covacate(2) sleeps with PCATCH,
 	 * so a signal can wake hometd first; it is then not vacant, and the
 	 * vacate retries.
+	 *
+	 * covacate(2) sleeps with switcher_lock as its interlock, held here
+	 * since hometd was read, so a thread that has exited, or whose
+	 * structure another process has reused, cannot pass this check.
 	 */
+	sx_assert(&switcher_lock, SA_XLOCKED);
 	thread_lock(hometd);
 	vacant = TD_IS_SLEEPING(hometd) &&
 	    hometd->td_wchan == COVACATE_WCHAN(hometd);
@@ -540,9 +564,12 @@ colocation_vacate(struct thread *td)
 	 * td's thread is now vacant, and the guest's code is home.
 	 */
 	tdcap = td->td_scb;
-	error = sucap(&tdcap->scb_borrower_td, (intcap_t)0);
+	error = sucap(&tdcap->scb_guest_scb, (intcap_t)0);
 	KASSERT(error == 0, ("%s: sucap to %#lp failed with error %d",
 	    __func__, tdcap, error));
+	error = sucap(&guestcap->scb_runner_scb, (intcap_t)guestcap);
+	KASSERT(error == 0, ("%s: sucap to %#lp failed with error %d",
+	    __func__, guestcap, error));
 
 	wakeup(COVACATE_WCHAN(hometd));
 	SWITCHER_UNLOCK();
@@ -664,7 +691,7 @@ setup_scb(struct thread *td)
 	memset(&scb, 0, sizeof(scb));
 	scb.scb_target_unsealcap = switcher_target_sealcap;
 	scb.scb_home_td = (__cheri_tocap void * __capability)td;
-	scb.scb_borrower_td = NULL;
+	scb.scb_guest_scb = NULL;
 	scb.scb_caller_scb = errno_cap(EAGAIN);
 	scb.scb_runner_scb = td->td_scb;
 	colocation_store_scb(td, &scb);
@@ -1324,7 +1351,7 @@ db_print_scb(struct thread *td, struct switchercb *scbp)
 	}
 	db_print_cap(td, "    scb_target_scb:       ", scbp->scb_target_scb);
 	db_print_cap(td, "    scb_home_td:          ", scbp->scb_home_td);
-	db_print_cap(td, "    scb_borrower_td:      ", scbp->scb_borrower_td);
+	db_print_cap(td, "    scb_guest_scb:        ", scbp->scb_guest_scb);
 	db_print_cap(td, "    scb_runner_scb:       ", scbp->scb_runner_scb);
 	db_print_cap(td, "    scb_target_unsealcap: ",
 	    scbp->scb_target_unsealcap);
@@ -1431,7 +1458,7 @@ DB_SHOW_COMMAND(scb, db_show_scb)
 		    td->td_scb, td, p->p_pid, p->p_comm, db_get_stack_pid(td));
 		db_print_td_scb(td);
 
-		hometd = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
+		colocation_guest_home(td, &hometd);
 		shown_hometd = false;
 
 		have_scb = colocation_fetch_caller_scb(td, &scb);

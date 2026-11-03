@@ -66,11 +66,10 @@ struct switchercb {
 	struct thread * __capability		scb_home_td;
 
 	/*
-	 * Thread owning the context we're lending our thread to.  When
-	 * calling cocall(), this will be the callee thread.  NULL when
-	 * not lending.
+	 * SCB of the guest whose code runs on this SCB's home thread.  NULL
+	 * or this SCB itself means that no guest runs there.
 	 */
-	struct thread * __capability		scb_borrower_td;
+	struct switchercb * __capability	scb_guest_scb;
 
 	/*
 	 * SCB of the thread running this SCB's code now, or this SCB

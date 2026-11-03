@@ -101,40 +101,6 @@ SWITCHER_ENTRY(switcher_cocall)
 	bnez	t3, .Ltake_lock
 
 	/*
-	 * If scb_borrower_td in the callee's scb is NULL, then
-	 * the current thread is the caller thread and is going
-	 * to borrow the callee thread.  Set scb_borrower_td in
-	 * the caller's scb to the callee thread.  However, if
-	 * scb_borrower_td is not NULL, then the callee's thread
-	 * is returning to the callee and scb_borrower_thread
-	 * needs to be set to NULL in the callee's scb.
-	 *
-	 * XXX: The non-NULL branch assumes that the callee's
-	 * thread hosts this caller's code, and clears the
-	 * borrow record without checking.  Say A cocalls B, and
-	 * B's reply leaves A's code on B's thread.  If C then
-	 * cocalls B, this branch clears the record that A's
-	 * code is on B's thread.  What A's next syscall then
-	 * does depends on whether B has replied to C:
-	 *
-	 *  - Before the reply, the syscall runs as B.  See
-	 *    cheribsdtest colocation_pending_incumbent_vacate.
-	 *
-	 *  - After the reply, B's borrow record names C's
-	 *    thread, which is not waiting in covacate(2), so the
-	 *    syscall retries for ever in colocation_vacate().  See
-	 *    cheribsdtest colocation_served_incumbent_vacate.
-	 */
-	clc	ct1, SCB_BORROWER_TD(callee)
-	bnez	t1, 5f
-	clc	ct4, SCB_HOME_TD(callee)
-	csc	ct4, SCB_BORROWER_TD(caller)
-	j	6f
-5:
-	csd	zero, SCB_BORROWER_TD(callee)
-6:
-
-	/*
 	 * Put the caller cookie (caller's data capability with the tag
 	 * stripped off) where the callee wants it.
 	 */
@@ -175,6 +141,16 @@ SWITCHER_MARKER(switcher_cocall_copy_start)
 	addi	t5, t5, -CHERICAP_SIZE
 	bgtz	t5, .Lcopy_loop
 SWITCHER_MARKER(switcher_cocall_copy_end)
+
+	/*
+	 * Record that the callee's code runs on this thread now.  See the
+	 * arm64 switcher for how the rule works and why it follows the
+	 * copy.  It must come before the li to t0, which overwrites
+	 * callee (ct0).
+	 */
+	clc	ct1, SCB_RUNNER_SCB(caller)
+	csc	callee, SCB_GUEST_SCB(ct1)
+	csc	ct1, SCB_RUNNER_SCB(callee)
 
 	li	t0, 0
 
@@ -249,7 +225,6 @@ SWITCHER_MARKER(switcher_cocall_copy_onfault)
 	csc	cnull, SCB_CALLER_SCB(ct1)
 
 	/* Clear state in the caller's scb. */
-	csd	zero, SCB_BORROWER_TD(caller)
 	csc	cnull, SCB_TARGET_SCB(caller)
 
 	clc	csp, SCB_CSP(caller)
