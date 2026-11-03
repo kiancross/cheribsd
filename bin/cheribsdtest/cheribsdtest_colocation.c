@@ -56,6 +56,7 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sysexits.h>
@@ -1710,6 +1711,20 @@ CHERIBSDTEST(colocation_signal_while_hosted,
 	run_colocated_children(2, "signal not delivered to hosted code");
 }
 
+static bool
+is_asleep_in(pid_t pid, const char *wmesg)
+{
+	struct kinfo_proc kp;
+	size_t len;
+	int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, pid };
+
+	len = sizeof(kp);
+	if (sysctl(mib, nitems(mib), &kp, &len, NULL, 0) != 0)
+		cheribsdtest_failure_err("sysctl");
+
+	return (strcmp(kp.ki_wmesg, wmesg) == 0);
+}
+
 #define	COLOCATION_KILLED_WHILE_HOSTED_SERVICE	"colocation_killed_while_hosted"
 
 static void __dead2
@@ -1836,6 +1851,147 @@ CHERIBSDTEST(colocation_callee_killed_while_hosted,
 
 	CHERIBSDTEST_VERIFY2(WIFEXITED(status) && WEXITSTATUS(status) == 0,
 	    "caller status 0x%x", status);
+
+	cheribsdtest_success();
+}
+
+static const char *
+skip_without_root(const struct cheri_test *ctp __unused)
+{
+	if (geteuid() != 0)
+		return ("Needs root to set a fail point");
+
+	return (NULL);
+}
+
+static void
+set_fail_point(const char *name, const char *setting)
+{
+	if (sysctlbyname(name, NULL, NULL, setting, strlen(setting)) != 0)
+		cheribsdtest_failure_err("sysctlbyname(%s)", name);
+}
+
+/* Uses err(3), so that a coexec child can call it too. */
+static bool
+fail_point_is_armed(const char *name)
+{
+	char setting[128] = { 0 };
+	size_t len;
+
+	/* The kernel does not terminate the string. */
+	len = sizeof(setting) - 1;
+	if (sysctlbyname(name, setting, &len, NULL, 0) != 0)
+		err(EX_OSERR, "sysctlbyname(%s)", name);
+
+	return (strcmp(setting, "off") != 0);
+}
+
+#define	HOME_NOT_YET_ASLEEP_FAIL_POINT					\
+	"debug.fail_point.colocation_covacate_pre_sleep"
+
+static void
+home_not_yet_asleep_callee(void)
+{
+	/*
+	 * Wait until the test process has set the fail point.  The first
+	 * coaccept() in pid_reply_callee() finds no caller, so B's thread TB
+	 * enters covacate(2), and the fail point must be set by then to hold
+	 * TB.
+	 */
+	while (!fail_point_is_armed(HOME_NOT_YET_ASLEEP_FAIL_POINT))
+		usleep(1000);
+
+	pid_reply_callee();
+}
+
+/*
+ * Ends the hold on TB once B's syscall has reached the vacate, which leaves
+ * TA asleep in covacate(2).
+ */
+static void __dead2
+home_not_yet_asleep_releaser(pid_t caller)
+{
+	while (!is_asleep_in(caller, "covacate"))
+		usleep(1000);
+
+	set_fail_point(HOME_NOT_YET_ASLEEP_FAIL_POINT, "off");
+	_exit(0);
+}
+
+/*
+ * B is the callee and the test process A is the caller, with kernel threads
+ * TB and TA.  The fail point colocation_covacate_pre_sleep holds TB in
+ * covacate(2) before it sleeps, and A cocalls B during the hold.  Another
+ * child of A ends the hold once B's syscall has reached the vacate.
+ *
+ *	A>B	=> {TA->B, (A)}
+ *	B@	|= {TB->B}
+ *	A<B
+ *
+ * Property under test: B's syscall waits until TB is asleep in covacate(2),
+ * then moves B's code there and runs as B.
+ */
+CHERIBSDTEST(colocation_home_not_yet_asleep,
+    "Check that a callee's syscall during a cocall waits until the callee's "
+    "own thread is asleep in covacate(2), and then runs as the callee",
+    .ct_child_func = home_not_yet_asleep_callee,
+    .ct_check_skip = skip_without_root,
+    .ct_xfail_reason =
+	"A syscall from hosted code swaps frames with its home thread before "
+	"that thread is asleep in covacate(2), so the wakeup is lost and the "
+	"syscall never runs")
+{
+	char setting[64];
+	void *target;
+	intcap_t buf = 0;
+	pid_t callee, releaser;
+	int status;
+
+	/*
+	 * Clear a setting left by a run that died, which would let the callee
+	 * start before the fail point is set for it.
+	 */
+	set_fail_point(HOME_NOT_YET_ASLEEP_FAIL_POINT, "off");
+
+	callee = fork();
+	if (callee == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (callee == 0)
+		cheribsdtest_coexec_child();
+
+	/*
+	 * No count: once a counted entry runs out, another thread passing the
+	 * fail point clears the setting, and "off" then wakes nobody.  fail(9)
+	 * reads a pid filter only after an argument, which pause ignores.
+	 */
+	snprintf(setting, sizeof(setting), "pause(0)[pid %d]", callee);
+	set_fail_point(HOME_NOT_YET_ASLEEP_FAIL_POINT, setting);
+
+	releaser = fork();
+	if (releaser == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (releaser == 0)
+		home_not_yet_asleep_releaser(getppid());
+
+	target = wait_for_service(COLOCATION_PID_REPLY_SERVICE, callee);
+
+	/* Once TB is asleep in the fail point, "off" wakes it. */
+	while (!is_asleep_in(callee, "failpt"))
+		usleep(1000);
+
+	cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+
+	if (waitpid(releaser, &status, 0) != releaser)
+		cheribsdtest_failure_err("waitpid");
+
+	CHERIBSDTEST_VERIFY2(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+	    "releaser status 0x%x", status);
+
+	CHERIBSDTEST_VERIFY2((pid_t)buf == callee,
+	    "callee's syscall returned pid %d, expected %d", (pid_t)buf,
+	    callee);
 
 	cheribsdtest_success();
 }
