@@ -279,6 +279,7 @@ void
 colocation_guest_home(struct thread *td, struct thread **hometdp)
 {
 	struct switchercb scb;
+	struct thread *hometd;
 	bool have_scb;
 
 	have_scb = colocation_fetch_scb(td, &scb);
@@ -287,7 +288,22 @@ colocation_guest_home(struct thread *td, struct thread **hometdp)
 		return;
 	}
 
-	*hometdp = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
+	/*
+	 * A home thread without an SCB has exited, as
+	 * colocation_thread_exit() clears td_scb, or has been reused for a
+	 * thread that has not called cosetup(2).  Either way the guest's code
+	 * has no home, and no guest is reported: td's signals are delivered,
+	 * and a fault in the guest's code goes to td's process rather than to
+	 * one that may have been reaped.  Threads are type-stable, so reading
+	 * td_scb of an exited one is safe.
+	 *
+	 * XXX: a reused thread that has called cosetup(2) is still followed.
+	 */
+	hometd = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
+	if (hometd != NULL && hometd->td_scb == NULL)
+		hometd = NULL;
+
+	*hometdp = hometd;
 }
 
 void

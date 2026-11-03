@@ -1147,12 +1147,6 @@ CHERIBSDTEST(colocation_pending_callee_vacate,
     "and the second caller's next syscall runs as the second caller "
     "(multi-client cocall)",
     .ct_child_func = colocation_pending_callee_child,
-    /*
-     * XXX: the check fails with a wrong pid, and the failing test leaves
-     * the incumbent hosted on TB.  A later SIGKILL to the incumbent hits a
-     * separate bug that hangs or panics the kernel.
-     */
-    .ct_check_skip = skip_known_panic,
     .ct_xfail_reason =
 	"Multi-client cocall is not yet supported: a second caller's cocall "
 	"clears the first caller's borrow record, and nothing evicts the first "
@@ -1698,12 +1692,6 @@ CHERIBSDTEST(colocation_signal_while_hosted,
     "Check that a signal to a hosted process interrupts its code on the "
     "thread hosting it, and that the handler runs as the hosted process",
     .ct_child_func = colocation_signal_while_hosted_child,
-    /*
-     * XXX: when A exits, the kernel unmaps its memory, and B's thread,
-     * which may still run A's code, then faults; the teardown can hang or
-     * panic the kernel.
-     */
-    .ct_check_skip = skip_known_panic,
     .ct_xfail_reason =
 	"The kernel runs the handler on the process's vacant home thread, not "
 	"where its code runs")
