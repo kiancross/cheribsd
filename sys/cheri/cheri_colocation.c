@@ -295,11 +295,11 @@ colocation_thread_exit(struct thread *td)
 	struct vmspace *vmspace;
 	struct coname *con, *con_temp;
 	void * __capability target;
-	struct switchercb scb;
-	bool have_scb;
+	struct switchercb * __capability tdcap;
+	int error __diagused;
 
-	have_scb = colocation_fetch_scb(td, &scb);
-	if (!have_scb)
+	tdcap = td->td_scb;
+	if (tdcap == NULL)
 		return;
 
 	if (counregister_on_exit) {
@@ -331,11 +331,14 @@ colocation_thread_exit(struct thread *td)
 	 * Set scb_caller_scb to a special "null" capability, so that cocall(2)
 	 * can see the callee thread is dead.
 	 */
-	scb.scb_caller_scb = errno_cap(ENOLINK);
-	scb.scb_home_td = NULL;
-	scb.scb_borrower_td = NULL;
+	colocation_store_caller_scb(tdcap, errno_cap(ENOLINK));
+	error = sucap(&tdcap->scb_home_td, (intcap_t)0);
+	KASSERT(error == 0, ("%s: sucap to %#lp failed with error %d",
+	    __func__, tdcap, error));
+	error = sucap(&tdcap->scb_borrower_td, (intcap_t)0);
+	KASSERT(error == 0, ("%s: sucap to %#lp failed with error %d",
+	    __func__, tdcap, error));
 
-	colocation_store_scb(td, &scb);
 	td->td_scb = NULL;
 }
 
