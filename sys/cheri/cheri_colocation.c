@@ -35,6 +35,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/capsicum.h>
+#include <sys/fail.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/kernel.h>
@@ -767,6 +768,13 @@ int
 kern_covacate(struct thread *td)
 {
 	int error;
+
+	/*
+	 * Lets a test hold td here, so that a vacate finds td not yet asleep
+	 * in covacate(2).
+	 */
+	KFAIL_POINT_CODE(DEBUG_FP, colocation_covacate_pre_sleep,
+	    /* do nothing */);
 
 	SWITCHER_LOCK();
 	error = msleep(COVACATE_WCHAN(td), &switcher_lock,
