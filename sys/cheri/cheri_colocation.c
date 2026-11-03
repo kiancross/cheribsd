@@ -362,15 +362,15 @@ colocation_vacate(struct thread *td)
 
 #if   defined(__riscv)
 	KASSERT(td->td_frame->tf_t[0] != SYS_covacate,
-	    ("%s: vacating for covacate(); home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
-	    __func__, (long)hometd->td_frame->tf_t[0],
-	    td, td->td_proc->p_pid, td->td_proc->p_comm,
+	    ("%s: vacating for covacate(2); td %p, pid %d (%s); "
+	    "home td %p, home pid %d (%s)\n",
+	    __func__, td, td->td_proc->p_pid, td->td_proc->p_comm,
 	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #elif defined(__aarch64__)
 	KASSERT(td->td_frame->tf_x[8] != SYS_covacate,
-	    ("%s: vacating for covacate(); home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
-	    __func__, (long)hometd->td_frame->tf_x[8],
-	    td, td->td_proc->p_pid, td->td_proc->p_comm,
+	    ("%s: vacating for covacate(2); td %p, pid %d (%s); "
+	    "home td %p, home pid %d (%s)\n",
+	    __func__, td, td->td_proc->p_pid, td->td_proc->p_comm,
 	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #else
 #error "what architecture is this?"
@@ -421,14 +421,16 @@ colocation_vacate(struct thread *td)
 	 */
 #if   defined(__riscv)
 	KASSERT(td->td_frame->tf_t[0] == SYS_covacate,
-	    ("%s: td_sa.code %ld != SYS_covacate %d; home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
-	    __func__, (long)td->td_frame->tf_t[0], SYS_covacate, (long)hometd->td_frame->tf_t[0],
+	    ("%s: syscall %ld != SYS_covacate %d; td %p, pid %d (%s); "
+	    "home td %p, home pid %d (%s)\n",
+	    __func__, (long)td->td_frame->tf_t[0], SYS_covacate,
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
 	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #elif defined(__aarch64__)
 	KASSERT(td->td_frame->tf_x[8] == SYS_covacate,
-	    ("%s: td_sa.code %ld != SYS_covacate %d; home td_sa.code %ld; td %p, pid %d (%s); home td %p, home pid %d (%s)\n",
-	    __func__, (long)td->td_frame->tf_x[8], SYS_covacate, (long)hometd->td_frame->tf_x[8],
+	    ("%s: syscall %ld != SYS_covacate %d; td %p, pid %d (%s); "
+	    "home td %p, home pid %d (%s)\n",
+	    __func__, (long)td->td_frame->tf_x[8], SYS_covacate,
 	    td, td->td_proc->p_pid, td->td_proc->p_comm,
 	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
 #else
