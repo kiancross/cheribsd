@@ -571,6 +571,13 @@ colocation_vacate(struct thread *td)
 	KASSERT(error == 0, ("%s: sucap to %#lp failed with error %d",
 	    __func__, guestcap, error));
 
+	/*
+	 * Lets a test hold td between the swap and the wakeup, so that a
+	 * signal can end hometd's sleep first.
+	 */
+	KFAIL_POINT_CODE(DEBUG_FP, colocation_vacate_pre_wakeup,
+	    /* do nothing */);
+
 	wakeup(COVACATE_WCHAN(hometd));
 	SWITCHER_UNLOCK();
 
