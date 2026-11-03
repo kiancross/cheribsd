@@ -181,14 +181,21 @@ colocation_store_scb(struct thread *td, struct switchercb *scbp)
 }
 
 static void
-colocation_store_caller_scb(struct switchercb * __capability targetcap,
-    struct switchercb * __capability callercap)
+colocation_store_scb_cap(void * __capability fieldcap, intcap_t value)
 {
 	int error __diagused;
 
-	error = sucap(&targetcap->scb_caller_scb, (intcap_t)callercap);
-	KASSERT(error == 0, ("%s: sucap to %#lp failed with error %d",
-	    __func__, targetcap, error));
+	error = sucap(fieldcap, value);
+	KASSERT(error == 0, ("%s: sucap to %#lp failed", __func__, fieldcap));
+}
+
+static void
+colocation_store_caller_scb(struct switchercb * __capability targetcap,
+    struct switchercb * __capability callercap)
+{
+
+	colocation_store_scb_cap(&targetcap->scb_caller_scb,
+	    (intcap_t)callercap);
 }
 
 static bool
@@ -291,15 +298,14 @@ colocation_thread_exit(struct thread *td)
 	struct vmspace *vmspace;
 	struct coname *con, *con_temp;
 	void * __capability target;
-	struct switchercb scb;
-	bool have_scb;
+	struct switchercb * __capability tdcap;
 
-	have_scb = colocation_fetch_scb(td, &scb);
-	if (!have_scb)
+	tdcap = td->td_scb;
+	if (tdcap == NULL)
 		return;
 
 	if (counregister_on_exit) {
-		target = cheri_seal(td->td_scb, switcher_target_sealcap);
+		target = cheri_seal(tdcap, switcher_target_sealcap);
 
 		vmspace = td->td_proc->p_vmspace;
 
@@ -320,18 +326,20 @@ colocation_thread_exit(struct thread *td)
 	 */
 	wakeup_slow_callers();
 
-	COLOCATION_DEBUG("terminating thread %p, scb %lp",
-	    td, td->td_scb);
+	COLOCATION_DEBUG("terminating thread %p, scb %lp", td, tdcap);
 
 	/*
 	 * Set scb_caller_scb to a special "null" capability, so that cocall(2)
 	 * can see the callee thread is dead.
+	 *
+	 * Store each field on its own.  The exiting thread's code may still
+	 * run on another thread, where the switcher saves its registers in
+	 * this SCB, and a copy-out of the whole SCB would overwrite them.
 	 */
-	scb.scb_caller_scb = errno_cap(ENOLINK);
-	scb.scb_home_td = NULL;
-	scb.scb_borrower_td = NULL;
+	colocation_store_caller_scb(tdcap, errno_cap(ENOLINK));
+	colocation_store_scb_cap(&tdcap->scb_home_td, (intcap_t)0);
+	colocation_store_scb_cap(&tdcap->scb_borrower_td, (intcap_t)0);
 
-	colocation_store_scb(td, &scb);
 	td->td_scb = NULL;
 }
 
