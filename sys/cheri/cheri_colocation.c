@@ -42,6 +42,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/limits.h>
 #include <sys/mman.h>
 #include <sys/proc.h>
+#include <sys/signalvar.h>
 #include <sys/sx.h>
 #include <sys/syscall.h>
 #include <sys/syscallsubr.h>
@@ -94,6 +95,12 @@ struct sx		switcher_lock;
 #define	COVACATE_WCHAN(td)	(&(td)->td_scb)
 #define	SLOW_CALL_WCHAN(targetcap)					\
 	((__cheri_fromcap const void *)(targetcap))
+
+/*
+ * A thread whose guest cannot go home yet waits for at least 10 ms before
+ * the guest's syscall runs again and retries the vacate.
+ */
+#define	VACATE_WAIT_TICKS	(hz / 100 + 1)
 
 static int colocation_debug;
 SYSCTL_INT(_debug, OID_AUTO, colocation_debug, CTLFLAG_RWTUN,
@@ -393,32 +400,77 @@ colocation_swap_fp(struct thread *td, struct thread *hometd)
 #endif
 
 /*
- * Assign our trapframe (userspace context) to the thread waiting
- * in covacate(2) and wake it up; it'll return to userspace with ERESTART
- * and then bounce back.
+ * Leave the guest's code on td's thread, rewind its syscall, and drop the
+ * switcher lock, so that the syscall runs again after a short wait and
+ * retries the vacate.  hometd is the guest's home thread.
+ */
+static bool
+colocation_vacate_wait(struct thread *td, struct thread *hometd)
+{
+	static struct timeval lastwarn;
+	static const struct timeval warninterval = { 10, 0 };
+
+	sx_assert(&switcher_lock, SA_XLOCKED);
+
+	if (ratecheck(&lastwarn, &warninterval))
+		printf("%s: td %p, pid %d (%s): home td %p not vacant, "
+		    "retrying\n", __func__, td, td->td_proc->p_pid,
+		    td->td_proc->p_comm, hometd);
+
+#if   defined(__riscv)
+	td->td_frame->tf_sepc -= 4;
+#elif defined(__aarch64__)
+	td->td_frame->tf_elr -= 4;
+#endif
+	SWITCHER_UNLOCK();
+
+	/*
+	 * ast_sig() holds td's signals back while td hosts a guest, and a
+	 * held-back signal schedules no further AST.  Schedule one on each
+	 * retry, so that a pending signal is delivered once the guest has
+	 * gone.
+	 */
+	PROC_LOCK(td->td_proc);
+	signotify(td);
+	PROC_UNLOCK(td->td_proc);
+
+	/*
+	 * td sleeps rather than yields, so that it does not spin on a CPU
+	 * that the code on the home thread may need.
+	 */
+	pause("vacate", VACATE_WAIT_TICKS);
+	return (false);
+}
+
+/*
+ * Send a guest on td's thread home when it makes a syscall, so that the
+ * syscall runs on its home thread, as its own process.  The guest's
+ * trapframe and FP state are swapped with those of its home thread, which
+ * waits in covacate(2).  The home thread wakes, returns ERESTART, and runs
+ * the syscall.  td goes on into covacate(2) on the swapped-in frame.
+ *
+ * If the home thread is not waiting in covacate(2), td waits briefly and
+ * returns false with the syscall rewound, so that the syscall runs again
+ * and retries.  Nothing evicts other code from the home thread, so the
+ * retries go on until that code leaves it.
  *
  * Called from trap().
  */
-void
+bool
 colocation_vacate(struct thread *td)
 {
 	struct switchercb scb;
+	struct switchercb * __capability tdcap;
 	struct thread *hometd;
 	struct trapframe hometrapframe;
-	bool have_scb;
+	bool vacant;
+	int error __diagused;
 
-	have_scb = colocation_fetch_scb(td, &scb);
-	if (!have_scb)
-		return;
+	if (!colocation_fetch_scb(td, &scb) || scb.scb_borrower_td == NULL)
+		return (true);
 
+	SWITCHER_LOCK();
 	hometd = (__cheri_fromcap struct thread *)scb.scb_borrower_td;
-	if (hometd == NULL) {
-		/*
-		 * Nothing borrowed yet.
-		 */
-		return;
-	}
-
 #if   defined(__riscv)
 	KASSERT(td->td_frame->tf_t[0] != SYS_covacate,
 	    ("%s: vacating for covacate(); td %p, pid %d (%s); "
@@ -450,14 +502,28 @@ colocation_vacate(struct thread *td)
 		kdb_enter(KDB_WHY_CHERI, "vacate");
 #endif
 
+	/*
+	 * hometd's thread lock keeps it asleep until its frame has been
+	 * swapped.  TD_IS_SLEEPING, rather than TD_ON_SLEEPQ, means that it
+	 * has switched out, so its FP state is in its pcb, where
+	 * colocation_swap_fp() expects it.  covacate(2) sleeps with PCATCH,
+	 * so a signal can wake hometd first; it is then not vacant, and the
+	 * vacate retries.
+	 */
+	thread_lock(hometd);
+	vacant = TD_IS_SLEEPING(hometd) &&
+	    hometd->td_wchan == COVACATE_WCHAN(hometd);
+	if (!vacant) {
+		thread_unlock(hometd);
+		return (colocation_vacate_wait(td, hometd));
+	}
+
 #ifdef __aarch64__
 	/*
-	 * Because this thread was borrowed by a callee coprocess this
-	 * register contains the starting address of the thread local storage
-	 * (TLS) of another thread. This overwrites this address with the
-	 * TLS starting address that actually belongs to this thread.
-	 * We have to do this here because the value in this register is written
-	 * to kernel data structures when we execute covacate later on.
+	 * This register holds the guest's TLS pointer.  Restore the TLS
+	 * pointer of td's own code, which the switcher saved in td's SCB, so
+	 * that the context switch in covacate(2)'s sleep saves it in td's pcb
+	 * for when that code comes home.
 	 */
 	WRITE_SPECIALREG_CAP(ctpidr_el0, scb.scb_tls);
 #endif
@@ -468,13 +534,18 @@ colocation_vacate(struct thread *td)
 #ifdef __aarch64__
 	colocation_swap_fp(td, hometd);
 #endif
+	thread_unlock(hometd);
 
 	/*
-	 * Wake up the other thread, which should return with ERESTART,
-	 * refetch its args from the updated trapframe, and then execute
-	 * whatever syscall we've just entered.
+	 * td's thread is now vacant, and the guest's code is home.
 	 */
+	tdcap = td->td_scb;
+	error = sucap(&tdcap->scb_borrower_td, (intcap_t)0);
+	KASSERT(error == 0, ("%s: sucap to %#lp failed with error %d",
+	    __func__, tdcap, error));
+
 	wakeup(COVACATE_WCHAN(hometd));
+	SWITCHER_UNLOCK();
 
 	/*
 	 * Continue as usual, but calling covacate(2) instead of whatever
@@ -499,8 +570,7 @@ colocation_vacate(struct thread *td)
 #error "what architecture is this?"
 #endif
 
-	scb.scb_borrower_td = NULL;
-	colocation_store_scb(td, &scb);
+	return (true);
 }
 
 bool

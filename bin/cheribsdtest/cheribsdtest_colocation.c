@@ -814,20 +814,6 @@ CHERIBSDTEST(colocation_callee_exit_while_hosted,
 }
 
 /*
- * A test that panics or hangs the kernel stops the whole run, so these tests
- * are skipped unless CHERIBSDTEST_RUN_PANICS is set.
- */
-static const char *
-skip_known_panic(const struct cheri_test *ctp __unused)
-{
-	if (getenv("CHERIBSDTEST_RUN_PANICS") != NULL)
-		return (NULL);
-
-	return ("Panics or hangs the kernel; set CHERIBSDTEST_RUN_PANICS to "
-	    "run it");
-}
-
-/*
  * A test child normally reports its result through ccsp, a page that it
  * shares with the test process.  A coexec child is a new program with no
  * pointer to that page, so cheribsdtest_failure_*() cannot report from it.
@@ -1051,12 +1037,6 @@ CHERIBSDTEST(colocation_served_incumbent_vacate,
     "the first caller's next syscall runs on its own thread as itself "
     "(multi-client cocall)",
     .ct_child_func = colocation_served_incumbent_child,
-    /*
-     * XXX: the incumbent's syscall swaps trapframes with the newcomer,
-     * which is not waiting in covacate(2), and the SYS_covacate KASSERT
-     * fires.
-     */
-    .ct_check_skip = skip_known_panic,
     .ct_xfail_reason =
 	"Multi-client cocall is not yet supported: a second caller's cocall "
 	"clears the first caller's borrow record")
@@ -1531,12 +1511,6 @@ CHERIBSDTEST(colocation_nested_incumbent_vacate,
     "callee's syscall and the first caller's next syscall each run as their "
     "own process (multi-client cocall)",
     .ct_child_func = colocation_nested_incumbent_child,
-    /*
-     * XXX: the check fails with a wrong pid, or the kernel panics: A's
-     * syscall can swap trapframes with TC, which is not waiting in
-     * covacate(2), and the SYS_covacate KASSERT fires.
-     */
-    .ct_check_skip = skip_known_panic,
     .ct_xfail_reason =
 	"Multi-client cocall is not yet supported: a second caller's cocall "
 	"clears the first caller's borrow record")
@@ -1798,11 +1772,7 @@ CHERIBSDTEST(colocation_callee_killed_while_hosted,
     "Check that, when a callee is killed while hosted, its code's syscall "
     "waits rather than running as the caller, and the caller can still be "
     "killed",
-    .ct_child_func = colocation_callee_killed_child,
-    .ct_xfail_reason =
-	"A syscall from hosted code swaps frames with its home thread even "
-	"after that thread has exited, which leaves the hosting thread asleep "
-	"in covacate(2)")
+    .ct_child_func = colocation_callee_killed_child)
 {
 	void (*spin)(void);
 	void *target;
@@ -1944,11 +1914,7 @@ CHERIBSDTEST(colocation_home_not_yet_asleep,
     "Check that a callee's syscall during a cocall waits until the callee's "
     "own thread is asleep in covacate(2), and then runs as the callee",
     .ct_child_func = home_not_asleep_callee,
-    .ct_check_skip = skip_need_root,
-    .ct_xfail_reason =
-	"A syscall from hosted code swaps frames with its home thread before "
-	"that thread is asleep in covacate(2), so the wakeup is lost and the "
-	"syscall never runs")
+    .ct_check_skip = skip_need_root)
 {
 	char setting[64];
 	void *target;

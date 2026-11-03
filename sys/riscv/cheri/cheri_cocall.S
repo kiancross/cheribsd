@@ -120,9 +120,10 @@ SWITCHER_ENTRY(switcher_cocall)
 	 *  - Before the reply, the syscall runs as B.  See
 	 *    cheribsdtest colocation_pending_incumbent_vacate.
 	 *
-	 *  - After the reply, the syscall trips the SYS_covacate
-	 *    KASSERT in colocation_vacate().  See cheribsdtest
-	 *    colocation_served_incumbent_vacate.
+	 *  - After the reply, B's borrow record names C's
+	 *    thread, which is not waiting in covacate(2), so the
+	 *    syscall retries for ever in colocation_vacate().  See
+	 *    cheribsdtest colocation_served_incumbent_vacate.
 	 */
 	clc	ct1, SCB_BORROWER_TD(callee)
 	bnez	t1, 5f
