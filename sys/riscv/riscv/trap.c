@@ -684,7 +684,11 @@ do_trap_user(struct trapframe *frame)
 	case SCAUSE_ECALL_USER:
 		frame->tf_sepc += 4;	/* Next instruction */
 #if __has_feature(capabilities)
-		colocation_vacate(td);
+		if (!colocation_vacate(td)) {
+			/* The syscall was rewound to retry the vacate. */
+			userret(td, frame);
+			break;
+		}
 #endif
 		ecall_handler();
 		break;

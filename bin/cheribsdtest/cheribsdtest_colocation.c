@@ -814,20 +814,6 @@ CHERIBSDTEST(colocation_callee_exit_while_hosted,
 }
 
 /*
- * A test that panics or hangs the kernel stops the whole run, so these tests
- * are skipped unless CHERIBSDTEST_RUN_PANICS is set.
- */
-static const char *
-skip_known_panic(const struct cheri_test *ctp __unused)
-{
-	if (getenv("CHERIBSDTEST_RUN_PANICS") != NULL)
-		return (NULL);
-
-	return ("Panics or hangs the kernel; set CHERIBSDTEST_RUN_PANICS to "
-	    "run it");
-}
-
-/*
  * A test child normally reports its result through ccsp, a page that it
  * shares with the test process.  A coexec child is a new program with no
  * pointer to that page, so cheribsdtest_failure_*() cannot report from it.
@@ -1051,12 +1037,6 @@ CHERIBSDTEST(colocation_served_incumbent_vacate,
     "the first caller's next syscall runs on its own thread as itself "
     "(multi-client cocall)",
     .ct_child_func = colocation_served_incumbent_child,
-    /*
-     * XXX: the incumbent's syscall swaps trapframes with the newcomer,
-     * which is not waiting in covacate(2), and the SYS_covacate KASSERT
-     * fires.
-     */
-    .ct_check_skip = skip_known_panic,
     .ct_xfail_reason =
 	"Multi-client cocall is not yet supported: a second caller's cocall "
 	"clears the first caller's borrow record")
@@ -1147,12 +1127,6 @@ CHERIBSDTEST(colocation_pending_callee_vacate,
     "and the second caller's next syscall runs as the second caller "
     "(multi-client cocall)",
     .ct_child_func = colocation_pending_callee_child,
-    /*
-     * XXX: the check fails with a wrong pid, and the failing test leaves
-     * the incumbent hosted on TB.  A later SIGKILL to the incumbent hits a
-     * separate bug that hangs or panics the kernel.
-     */
-    .ct_check_skip = skip_known_panic,
     .ct_xfail_reason =
 	"Multi-client cocall is not yet supported: a second caller's cocall "
 	"clears the first caller's borrow record, and nothing evicts the first "
@@ -1537,12 +1511,6 @@ CHERIBSDTEST(colocation_nested_incumbent_vacate,
     "callee's syscall and the first caller's next syscall each run as their "
     "own process (multi-client cocall)",
     .ct_child_func = colocation_nested_incumbent_child,
-    /*
-     * XXX: the check fails with a wrong pid, or the kernel panics: A's
-     * syscall can swap trapframes with TC, which is not waiting in
-     * covacate(2), and the SYS_covacate KASSERT fires.
-     */
-    .ct_check_skip = skip_known_panic,
     .ct_xfail_reason =
 	"Multi-client cocall is not yet supported: a second caller's cocall "
 	"clears the first caller's borrow record")
@@ -1698,12 +1666,6 @@ CHERIBSDTEST(colocation_signal_while_hosted,
     "Check that a signal to a hosted process interrupts its code on the "
     "thread hosting it, and that the handler runs as the hosted process",
     .ct_child_func = colocation_signal_while_hosted_child,
-    /*
-     * XXX: when A exits, the kernel unmaps its memory, and B's thread,
-     * which may still run A's code, then faults; the teardown can hang or
-     * panic the kernel.
-     */
-    .ct_check_skip = skip_known_panic,
     .ct_xfail_reason =
 	"The kernel runs the handler on the process's vacant home thread, not "
 	"where its code runs")
@@ -1794,11 +1756,6 @@ CHERIBSDTEST(colocation_callee_killed_while_hosted,
     "Check that a caller gets ENOLINK from its cocall when its callee is "
     "killed while hosted",
     .ct_child_func = colocation_killed_while_hosted_child,
-    /*
-     * XXX: A's record still names B's exited thread, so SIGKILL cannot end
-     * A, and the fault of B's code on TA can panic the kernel.
-     */
-    .ct_check_skip = skip_known_panic,
     .ct_xfail_reason =
 	"Killing a hosted callee does not stop its code on its caller's "
 	"thread, which faults once the callee's memory is unmapped")
@@ -1906,12 +1863,12 @@ home_not_yet_asleep_callee(void)
 
 /*
  * Ends the hold on TB once B's syscall has reached the vacate, which leaves
- * TA asleep in covacate(2).
+ * TA asleep in its retry (wait message "vacate").
  */
 static void __dead2
 home_not_yet_asleep_releaser(pid_t caller)
 {
-	while (!is_asleep_in(caller, "covacate"))
+	while (!is_asleep_in(caller, "vacate"))
 		usleep(1000);
 
 	set_fail_point(HOME_NOT_YET_ASLEEP_FAIL_POINT, "off");
@@ -1935,11 +1892,7 @@ CHERIBSDTEST(colocation_home_not_yet_asleep,
     "Check that a callee's syscall during a cocall waits until the callee's "
     "own thread is asleep in covacate(2), and then runs as the callee",
     .ct_child_func = home_not_yet_asleep_callee,
-    .ct_check_skip = skip_without_root,
-    .ct_xfail_reason =
-	"A syscall from hosted code swaps frames with its home thread before "
-	"that thread is asleep in covacate(2), so the wakeup is lost and the "
-	"syscall never runs")
+    .ct_check_skip = skip_without_root)
 {
 	char setting[64];
 	void *target;

@@ -833,7 +833,11 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 	case EXCP_SVC32:
 	case EXCP_SVC64:
 #if __has_feature(capabilities)
-		colocation_vacate(td);
+		if (!colocation_vacate(td)) {
+			/* The syscall was rewound to retry the vacate. */
+			userret(td, frame);
+			break;
+		}
 #endif
 		svc_handler(td, frame);
 		break;

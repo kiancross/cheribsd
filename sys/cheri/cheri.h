@@ -200,7 +200,7 @@ struct trapframe;
 void	colocation_cleanup(struct thread *td);
 void	colocation_guest_home(struct thread *td, struct thread **hometdp);
 void	colocation_thread_exit(struct thread *td);
-void	colocation_vacate(struct thread *td);
+bool	colocation_vacate(struct thread *td);
 bool	colocation_trap_in_switcher(struct thread *td,
 	    struct trapframe *trapframe, const char *msg);
 void	db_print_td_scb(struct thread *td);
