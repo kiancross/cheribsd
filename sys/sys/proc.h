@@ -167,6 +167,7 @@ struct pargs {
  *      x - created at fork, only changes during single threading in exec
  *      y - created at first aio, doesn't change until exit or exec at which
  *          point we are single-threaded and only curthread changes it
+ *      z - switcher_lock sx, in cheri_colocation.c
  *
  * If the locking key specifies two identifiers (for example, p_pptr) then
  * either lock is sufficient for read access, but both locks must be held
@@ -324,6 +325,7 @@ struct thread {
 	long		td_ucredref;	/* (k) references on td_realucred */
 #if __has_feature(capabilities)
 	void * __capability td_scb;	/* (k) switcher control block */
+	int		td_covacate_swapped;	/* (z) Set by a vacate's swap */
 #endif
 #define	td_endzero td_sigmask
 

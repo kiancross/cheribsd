@@ -2151,11 +2151,7 @@ CHERIBSDTEST(colocation_signal_after_swap,
     "Check that a callee's syscall during a cocall still runs as the callee "
     "when a signal reaches the callee as its code goes home",
     .ct_child_func = signal_after_swap_callee,
-    .ct_check_skip = skip_without_root,
-    .ct_xfail_reason =
-	"A signal can end the callee's sleep in covacate(2) after its frame "
-	"is swapped, and so the callee's syscall fails with EINTR without "
-	"running")
+    .ct_check_skip = skip_without_root)
 {
 	char setting[64];
 	void *target;
