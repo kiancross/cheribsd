@@ -652,6 +652,13 @@ colocation_vacate(struct thread *td)
 	colocation_store_scb_cap(&tdcap->scb_guest_scb, (intcap_t)0);
 	colocation_store_scb_cap(&guestcap->scb_runner_scb, (intcap_t)guestcap);
 
+	/*
+	 * Lets a test hold td between the swap and the wakeup, so that a
+	 * signal can end hometd's sleep first.
+	 */
+	KFAIL_POINT_CODE(DEBUG_FP, colocation_vacate_pre_wakeup,
+	    /* do nothing */);
+
 	wakeup(COVACATE_WCHAN(hometd));
 	SWITCHER_UNLOCK();
 
