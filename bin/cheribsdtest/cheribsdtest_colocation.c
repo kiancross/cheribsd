@@ -2088,6 +2088,130 @@ CHERIBSDTEST(colocation_home_not_yet_asleep,
 	cheribsdtest_success();
 }
 
+#define	SIGNAL_AFTER_SWAP_FAIL_POINT					\
+	"debug.fail_point.colocation_vacate_pre_wakeup"
+
+static void
+signal_after_swap_handler(int sig __unused)
+{
+}
+
+static void
+signal_after_swap_callee(void)
+{
+	struct sigaction sa;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = signal_after_swap_handler;
+	sa.sa_flags = 0;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGUSR1, &sa, NULL) != 0)
+		err(EX_OSERR, "sigaction");
+
+	pid_reply_callee();
+}
+
+static void __dead2
+signal_after_swap_sender(pid_t caller, pid_t callee)
+{
+	/* Once TA is asleep in the fail point, "off" wakes it. */
+	while (!is_asleep_in(caller, "failpt"))
+		usleep(1000);
+
+	if (kill(callee, SIGUSR1) != 0)
+		err(EX_OSERR, "kill");
+
+	/*
+	 * The signal ends TB's sleep in covacate(2).  TB then waits for
+	 * switcher_lock, which TA holds, so it cannot sleep in covacate(2)
+	 * again before the hold ends.
+	 */
+	while (is_asleep_in(callee, "covacate"))
+		usleep(1000);
+
+	set_fail_point(SIGNAL_AFTER_SWAP_FAIL_POINT, "off");
+	_exit(0);
+}
+
+/*
+ * B is the callee and the test process A is the caller, with kernel threads
+ * TB and TA.  When B's code on TA makes a syscall, the vacate swaps frames
+ * with TB, and the fail point colocation_vacate_pre_wakeup then holds TA
+ * before it wakes TB.  Another child of A sends SIGUSR1 to B during the hold,
+ * and ends the hold once the signal has ended TB's sleep.
+ *
+ *	A>B	=> {TA->B, (A)}
+ *	B@	|= {TB->B}
+ *	A<B
+ *
+ * Property under test: B's syscall runs as B, although the signal ends TB's
+ * sleep in covacate(2) before the wakeup.
+ */
+CHERIBSDTEST(colocation_signal_after_swap,
+    "Check that a callee's syscall during a cocall still runs as the callee "
+    "when a signal reaches the callee as its code goes home",
+    .ct_child_func = signal_after_swap_callee,
+    .ct_check_skip = skip_without_root,
+    .ct_xfail_reason =
+	"A signal can end the callee's sleep in covacate(2) after its frame "
+	"is swapped, and so the callee's syscall fails with EINTR without "
+	"running")
+{
+	char setting[64];
+	void *target;
+	intcap_t buf = 0;
+	pid_t callee, sender;
+	int status;
+
+	/*
+	 * Wake any thread that a run that died left held, as it holds
+	 * switcher_lock.
+	 */
+	set_fail_point(SIGNAL_AFTER_SWAP_FAIL_POINT, "off");
+
+	/*
+	 * No count: once a counted entry runs out, another thread passing the
+	 * fail point clears the setting, and "off" then wakes nobody.  fail(9)
+	 * reads a pid filter only after an argument, which pause ignores.
+	 */
+	snprintf(setting, sizeof(setting), "pause(0)[pid %d]", getpid());
+	set_fail_point(SIGNAL_AFTER_SWAP_FAIL_POINT, setting);
+
+	callee = fork();
+	if (callee == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (callee == 0)
+		cheribsdtest_coexec_child();
+
+	sender = fork();
+	if (sender == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (sender == 0)
+		signal_after_swap_sender(getppid(), callee);
+
+	target = wait_for_service(COLOCATION_PID_REPLY_SERVICE, callee);
+
+	cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+
+	/*
+	 * Waits for the signal, so that the test cannot pass unless the
+	 * signal was sent.
+	 */
+	if (waitpid(sender, &status, 0) != sender)
+		cheribsdtest_failure_err("waitpid");
+
+	CHERIBSDTEST_VERIFY2(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+	    "sender status 0x%x", status);
+
+	CHERIBSDTEST_VERIFY2((pid_t)buf == callee,
+	    "callee's syscall returned pid %d, expected %d", (pid_t)buf,
+	    callee);
+
+	cheribsdtest_success();
+}
+
 #define	COLOCATION_ONE_CALLEE_SERVICE	"colocation_one_callee_at_a_time"
 
 /*
