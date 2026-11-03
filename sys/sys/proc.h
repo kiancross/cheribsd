@@ -324,6 +324,8 @@ struct thread {
 	long		td_ucredref;	/* (k) references on td_realucred */
 #if __has_feature(capabilities)
 	void * __capability td_scb;	/* (k) switcher control block */
+	/* (switcher_lock) A vacate swapped a frame in; covacate(2) clears it. */
+	int		td_covacate_swapped;
 #endif
 #define	td_endzero td_sigmask
 

@@ -558,6 +558,7 @@ colocation_vacate(struct thread *td)
 #ifdef __aarch64__
 	colocation_swap_fp(td, hometd);
 #endif
+	hometd->td_covacate_swapped = 1;
 	thread_unlock(hometd);
 
 	/*
@@ -943,20 +944,21 @@ kern_covacate(struct thread *td)
 	SWITCHER_LOCK();
 	error = msleep(COVACATE_WCHAN(td), &switcher_lock,
 	    PPAUSE | PCATCH, "covacate", 0);
+
+	/*
+	 * After a vacate's swap, td's trapframe holds the syscall that td's
+	 * own code made, so return ERESTART to run it.  A signal can end the
+	 * sleep between the swap and the wakeup, so error does not tell
+	 * whether the swap happened, and returning it would fail the syscall
+	 * without running it.
+	 */
+	if (td->td_covacate_swapped) {
+		td->td_covacate_swapped = 0;
+		error = ERESTART;
+	}
 	SWITCHER_UNLOCK();
 
-	if (error == 0) {
-		/*
-		 * We got woken up.  This means our own code is back (its
-		 * context is in our trapframe) and we can return with ERESTART,
-		 * to "bounce back" and execute the syscall userspace requested.
-		 */
-		//printf("%s: got switched to, td %p, returning ERESTART\n", __func__, td);
-		return (ERESTART);
-	} else {
-		//printf("%s: error %d, td %p\n", __func__, error, td);
-	}
-
+	KASSERT(error != 0, ("%s: td %p woken without a swap", __func__, td));
 	return (error);
 }
 
