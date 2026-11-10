@@ -638,17 +638,17 @@ CHERIBSDTEST(colocation_callee_cpu_time,
 	}
 }
 
-#define	COLOCATION_SINGLE_CLIENT_SERVICE	"colocation_single_client"
+#define	COLOCATION_PID_REPLY_SERVICE	"colocation_pid_reply"
 
-static void
-colocation_single_client_callee(void)
+static void __dead2
+pid_reply_callee(void)
 {
 	intcap_t buf = 0;
 
 	if (cosetup(COSETUP_COACCEPT) != 0)
 		err(EX_OSERR, "cosetup");
 
-	if (coregister(COLOCATION_SINGLE_CLIENT_SERVICE, NULL) != 0)
+	if (coregister(COLOCATION_PID_REPLY_SERVICE, NULL) != 0)
 		err(EX_OSERR, "coregister");
 
 	if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
@@ -686,7 +686,7 @@ colocation_single_client_callee(void)
 CHERIBSDTEST(colocation_single_client_vacate,
     "Check that a callee's syscall during a cocall and its caller's next "
     "syscall each run as their own process",
-    .ct_child_func = colocation_single_client_callee)
+    .ct_child_func = pid_reply_callee)
 {
 	void *target;
 	intcap_t buf = 0;
@@ -701,8 +701,7 @@ CHERIBSDTEST(colocation_single_client_vacate,
 	if (pid == 0) {
 		cheribsdtest_coexec_child();
 	} else {
-		target = wait_for_service(COLOCATION_SINGLE_CLIENT_SERVICE,
-		    pid);
+		target = wait_for_service(COLOCATION_PID_REPLY_SERVICE, pid);
 
 		cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
 
