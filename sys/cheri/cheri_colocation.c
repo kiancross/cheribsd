@@ -161,32 +161,21 @@ colocation_fetch_scb(struct thread *td, struct switchercb *scbp)
 }
 
 static void
-colocation_copyout_scb(void * __capability scbcap,
-    const struct switchercb *scbp)
-{
-	int error __diagused;
-
-	KASSERT(scbcap != NULL, ("%s: NULL addr", __func__));
-
-	error = copyoutcap(scbp, scbcap, sizeof(*scbp));
-	KASSERT(error == 0, ("%s: copyoutcap to %#lp failed with error %d",
-	    __func__, scbcap, error));
-}
-
-static void
-colocation_store_scb(struct thread *td, struct switchercb *scbp)
-{
-
-	colocation_copyout_scb(td->td_scb, scbp);
-}
-
-static void
 colocation_store_scb_cap(void * __capability fieldcap, intcap_t value)
 {
 	int error __diagused;
 
 	error = sucap(fieldcap, value);
 	KASSERT(error == 0, ("%s: sucap to %#lp failed", __func__, fieldcap));
+}
+
+static void
+colocation_store_scb_word(void * __capability fieldcap, long value)
+{
+	int error __diagused;
+
+	error = suword(fieldcap, value);
+	KASSERT(error == 0, ("%s: suword to %#lp failed", __func__, fieldcap));
 }
 
 static void
@@ -354,6 +343,7 @@ void
 colocation_vacate(struct thread *td)
 {
 	struct switchercb scb;
+	struct switchercb * __capability tdcap;
 	struct thread *hometd;
 	struct trapframe hometrapframe;
 	bool have_scb;
@@ -445,8 +435,8 @@ colocation_vacate(struct thread *td)
 #error "what architecture is this?"
 #endif
 
-	scb.scb_borrower_td = NULL;
-	colocation_store_scb(td, &scb);
+	tdcap = td->td_scb;
+	colocation_store_scb_cap(&tdcap->scb_borrower_td, (intcap_t)0);
 }
 
 bool
@@ -511,7 +501,7 @@ out:
 static int
 setup_scb(struct thread *td)
 {
-	struct switchercb scb;
+	struct switchercb * __capability tdcap;
 	vm_map_t map;
 	vm_pointer_t addr;
 	int rv;
@@ -537,12 +527,14 @@ setup_scb(struct thread *td)
 #endif
 
 	//printf("%s: scb at %p, td %p\n", __func__, (void *)addr, td);
-	memset(&scb, 0, sizeof(scb));
-	scb.scb_target_unsealcap = switcher_target_sealcap;
-	scb.scb_home_td = (__cheri_tocap void * __capability)td;
-	scb.scb_borrower_td = NULL;
-	scb.scb_caller_scb = errno_cap(EAGAIN);
-	colocation_store_scb(td, &scb);
+
+	/* The new page is zero-filled, so only non-zero fields need a store. */
+	tdcap = td->td_scb;
+	colocation_store_scb_cap(&tdcap->scb_target_unsealcap,
+	    (intcap_t)switcher_target_sealcap);
+	colocation_store_scb_cap(&tdcap->scb_home_td,
+	    (intcap_t)(__cheri_tocap void * __capability)td);
+	colocation_store_caller_scb(tdcap, errno_cap(EAGAIN));
 
 	return (0);
 }
@@ -799,12 +791,11 @@ kern_cocall_slow(void * __capability target,
     const void * __capability outbuf, size_t outlen,
     void * __capability inbuf, size_t inlen)
 {
-	struct switchercb scb, targetscb;
-	struct switchercb * __capability targetcap;
+	struct switchercb targetscb;
+	struct switchercb * __capability targetcap, * __capability tdcap;
 	struct thread *targettd __diagused;
 	ssize_t retval;
 	int error;
-	bool have_scb;
 
 	if (outbuf == NULL && outlen != 0) {
 		COLOCATION_DEBUG("outbuf == NULL, but outlen != 0, returning EINVAL");
@@ -815,8 +806,8 @@ kern_cocall_slow(void * __capability target,
 		return (EINVAL);
 	}
 
-	have_scb = colocation_fetch_scb(curthread, &scb);
-	if (!have_scb) {
+	tdcap = curthread->td_scb;
+	if (tdcap == NULL) {
 		COLOCATION_DEBUG("no scb, returning EINVAL");
 		return (EINVAL);
 	}
@@ -894,16 +885,11 @@ again:
 
 	colocation_store_caller_scb(targetcap, curthread->td_scb);
 
-	scb.scb_target_scb = targetcap;
-	scb.scb_outbuf = outbuf;
-	scb.scb_outlen = outlen;
-	scb.scb_inbuf = inbuf;
-	scb.scb_inlen = inlen;
-	/*
-	 * We don't need atomics here; nobody else could have modified
-	 * our (caller's) SCB.
-	 */
-	colocation_store_scb(curthread, &scb);
+	colocation_store_scb_cap(&tdcap->scb_target_scb, (intcap_t)targetcap);
+	colocation_store_scb_cap(&tdcap->scb_outbuf, (intcap_t)outbuf);
+	colocation_store_scb_word(&tdcap->scb_outlen, outlen);
+	colocation_store_scb_cap(&tdcap->scb_inbuf, (intcap_t)inbuf);
+	colocation_store_scb_word(&tdcap->scb_inlen, inlen);
 
 	targettd = (__cheri_fromcap struct thread *)targetscb.scb_home_td;
 	KASSERT(targettd != NULL, ("%s: NULL targettd?\n", __func__));
