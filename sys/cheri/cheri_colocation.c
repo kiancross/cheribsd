@@ -543,7 +543,8 @@ colocation_vacate_wait(struct thread *td, struct thread *hometd)
  * trapframe, and on arm64 its FP state, are swapped with those of its home
  * thread, which waits in covacate(2).  The home thread wakes, returns
  * ERESTART, and runs the syscall.  td goes on into covacate(2) on the
- * swapped-in frame.
+ * swapped-in frame.  The syscall can be covacate(2) itself, which the
+ * switcher issues when the guest makes its first coaccept().
  *
  * If the home thread is not waiting in covacate(2), td waits briefly and
  * returns false with the syscall rewound, so that the syscall runs again
@@ -587,22 +588,6 @@ colocation_vacate(struct thread *td)
 		SWITCHER_UNLOCK();
 		return (false);
 	}
-
-#if   defined(__riscv)
-	KASSERT(td->td_frame->tf_t[0] != SYS_covacate,
-	    ("%s: vacating for covacate(2); td %p, pid %d (%s); "
-	    "home td %p, home pid %d (%s)\n",
-	    __func__, td, td->td_proc->p_pid, td->td_proc->p_comm,
-	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
-#elif defined(__aarch64__)
-	KASSERT(td->td_frame->tf_x[8] != SYS_covacate,
-	    ("%s: vacating for covacate(2); td %p, pid %d (%s); "
-	    "home td %p, home pid %d (%s)\n",
-	    __func__, td, td->td_proc->p_pid, td->td_proc->p_comm,
-	    hometd, hometd->td_proc->p_pid, hometd->td_proc->p_comm));
-#else
-#error "what architecture is this?"
-#endif
 
 	KASSERT(td == (__cheri_fromcap struct thread *)scb.scb_home_td,
 	    ("%s: td %p != scb_home_td %p\n", __func__, td, (__cheri_fromcap struct thread *)scb.scb_home_td));

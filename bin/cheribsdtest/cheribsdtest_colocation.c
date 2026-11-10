@@ -1807,6 +1807,150 @@ CHERIBSDTEST(colocation_callee_killed_while_hosted,
 	cheribsdtest_success();
 }
 
+#define	COLOCATION_FIRST_COACCEPT_SERVICE	"colocation_first_coaccept"
+
+static void __dead2
+first_coaccept_caller(void *target)
+{
+	intcap_t buf = 0;
+
+	if (cosetup(COSETUP_COCALL) != 0)
+		err(EX_OSERR, "cosetup_cocall");
+
+	if (cosetup(COSETUP_COACCEPT) != 0)
+		err(EX_OSERR, "cosetup_coaccept");
+
+	if (coregister(COLOCATION_FIRST_COACCEPT_SERVICE, NULL) != 0)
+		err(EX_OSERR, "coregister");
+
+	if (cocall(target, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+		err(EX_OSERR, "cocall");
+
+	/*
+	 * No syscall comes between the cocall and the first coaccept() (unless
+	 * libc is built with COCALL_UTRACE), so A's code is still on TB when
+	 * the switcher issues covacate(2).
+	 */
+	for (;;) {
+		if (coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf)) < 0)
+			err(EX_OSERR, "coaccept");
+
+		/* A's syscall while it serves P; the reply carries its pid. */
+		buf = getpid();
+	}
+}
+
+/* Ends a poll that would otherwise never end if A has exited. */
+static void
+first_coaccept_check_caller(pid_t caller)
+{
+	pid_t waited;
+	int status;
+
+	waited = waitpid(caller, &status, WNOHANG);
+	if (waited == -1)
+		cheribsdtest_failure_err("waitpid");
+
+	if (waited != 0)
+		cheribsdtest_failure_errx("caller exited: status 0x%x", status);
+}
+
+static void
+colocation_first_coaccept_child(void)
+{
+	void *target;
+
+	/*
+	 * B registers its service before the test process forks A, so the
+	 * lookup tells the two children apart.
+	 */
+	if (colookup(COLOCATION_PID_REPLY_SERVICE, &target) != 0)
+		pid_reply_callee();		/* callee B */
+
+	first_coaccept_caller(target);		/* caller A */
+}
+
+/*
+ * Two colocated processes share the test process P's vmspace: B is the
+ * callee, and A is a caller that starts to serve once B has replied.  Their
+ * kernel threads are TA, TB, and TP.  A's first coaccept() finds no caller,
+ * so the switcher issues covacate(2) on TB, and the kernel sends A's code
+ * home as for any other syscall from a guest: the first A@ below.
+ *
+ *	A>B	=> {TA->B, (A)}
+ *	B@
+ *	A<B	=> {TB->A}
+ *	A@	|= {TA->A}
+ *	P>A	=> {TP->A, (P)}
+ *	A@	|= {TA->A}
+ *	P<A
+ *
+ * Property under test: A's first coaccept(), made while A's code runs on
+ * TB, completes, and a syscall that A makes while it serves P runs as A.
+ */
+CHERIBSDTEST(colocation_first_coaccept_while_hosted,
+    "Check that a caller's first coaccept() can come while its code is "
+    "hosted on its callee's thread, and that a syscall that the caller "
+    "makes while it then serves runs as the caller",
+    .ct_child_func = colocation_first_coaccept_child)
+{
+	void *target;
+	intcap_t buf = 0;
+	pid_t callee, caller;
+
+	callee = fork();
+	if (callee == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (callee == 0)
+		cheribsdtest_coexec_child();
+
+	/* P never cocalls B: this only waits for B and kills it at exit. */
+	(void)wait_for_service(COLOCATION_PID_REPLY_SERVICE, callee);
+
+	caller = fork();
+	if (caller == -1)
+		cheribsdtest_failure_err("fork");
+
+	if (caller == 0)
+		cheribsdtest_coexec_child();
+
+	while (colookup(COLOCATION_FIRST_COACCEPT_SERVICE, &target) != 0) {
+		if (errno != ESRCH)
+			cheribsdtest_failure_err("colookup");
+
+		first_coaccept_check_caller(caller);
+		usleep(1000);
+	}
+
+	/*
+	 * A accepts cocalls as soon as its coaccept() starts, before A@ has
+	 * sent its code home, so P cocalls A only once A@ is done.  TA first
+	 * sleeps in covacate(2) at B@, and TB sleeps there again only after
+	 * A@, so TA is checked first: both true in that order means that A@
+	 * has happened.
+	 */
+	while (!is_asleep_in(caller, "covacate") ||
+	    !is_asleep_in(callee, "covacate")) {
+		first_coaccept_check_caller(caller);
+		usleep(1000);
+	}
+
+	cocall_or_fail(target, &buf, sizeof(buf), &buf, sizeof(buf));
+
+	CHERIBSDTEST_VERIFY2((pid_t)buf == caller,
+	    "caller's syscall returned pid %d, expected %d", (pid_t)buf,
+	    caller);
+
+	if (kill(caller, SIGKILL) != 0)
+		cheribsdtest_failure_err("kill");
+
+	if (waitpid(caller, NULL, 0) != caller)
+		cheribsdtest_failure_err("waitpid");
+
+	cheribsdtest_success();
+}
+
 static const char *
 skip_without_root(const struct cheri_test *ctp __unused)
 {
