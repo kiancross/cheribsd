@@ -87,6 +87,51 @@ void * __capability	switcher_target_sealcap = (void * __capability)-1;
  */
 void * __capability	capfd_sealcap = (void * __capability)-1;
 
+/*
+ * Locking key for struct switchercb, which each architecture defines in
+ * <machine/proc.h>.  The switcher runs in userspace and cannot take a
+ * kernel lock, so no field has a lock.  Instead, each field has one writer
+ * at a time: a thread runs one thing at a time, and an SCB's code runs on
+ * one thread at a time.  The lock field is the exception, and its letter
+ * says how it is shared.
+ *      c - constant once setup_scb() has written it
+ *      h - written only by the kernel: by setup_scb() and at thread exit
+ *      o - written only for this SCB's own code: by the switcher as that
+ *          code enters cocall or coaccept, or as its callee replies to it,
+ *          and by the kernel in a syscall that the code makes
+ *      l - the callee lock.  A cocall takes it with an atomic
+ *          store-conditional when it is NULL.  On RISC-V, a cocall whose copy
+ *          faults releases it; arm64 does not redirect the fault, and the
+ *          lock stays held.  This SCB's own coaccept opens it and releases
+ *          it, with a store that later takers see (a store-release on arm64;
+ *          a fence, then a store, on RISC-V).  The kernel stores errnos in
+ *          it: setup_scb(), coaccept_slow(2), cocall_slow(2) when its call
+ *          ends, and thread exit.  cocall_slow(2) takes it only when it holds
+ *          EPROTOTYPE, which no cocall can take, and switcher_lock serialises
+ *          the slow calls.
+ *      g - the home thread's record: written only on the home thread, by
+ *          the switcher's record rule (see cheri_cocall.S) or by the
+ *          kernel (colocation_vacate() and thread exit)
+ *      r - where this SCB's code runs: written by setup_scb(), by the
+ *          switcher when it switches to that code, and by
+ *          colocation_vacate() when it sends that code home.  XXX: in a
+ *          guest's first coaccept(), a cocall can switch to the guest's
+ *          code before the vacate writes this field.
+ *
+ * setup_scb() writes the fields before any capability to the SCB reaches
+ * userspace.
+ *
+ * Apart from the lock's other writers, only thread exit writes this SCB
+ * while its code may run on another thread: colocation_thread_exit() stores
+ * scb_caller_scb, scb_home_td, and scb_guest_scb one field at a time, so it
+ * changes no other field.  The last two are safe: only the kernel writes
+ * scb_home_td, and only what runs on the exiting thread writes
+ * scb_guest_scb.  XXX: the ENOLINK store to scb_caller_scb is a plain store
+ * into the lock.  The SCB's own coaccept can overwrite it, when it releases
+ * the lock or opens it, and it can overwrite the capability of a caller that
+ * still waits for its reply.
+ */
+
 struct sx		switcher_lock;
 
 #define	SWITCHER_LOCK()		sx_xlock(&switcher_lock)

@@ -32,11 +32,15 @@
 #define	_MACHINE_PROC_H_
 
 #ifdef CPU_CHERI
+/*
+ * The letters in the field comments refer to the locking key in
+ * sys/cheri/cheri_colocation.c.
+ */
 struct switchercb {
 	/*
-	 * SCB of the code that cocalled us.  This also serves as our
-	 * spinlock.  Must be first, as the load-reserved instructions
-	 * don't take an offset.  It holds one of three things:
+	 * (l) SCB of the code that cocalled us.  This also serves as our
+	 * spinlock.  Must be first, as the load-reserved instructions don't
+	 * take an offset.  It holds one of three things:
 	 *
 	 *  - NULL: no cocall is in progress, and a cocall can take the lock.
 	 *
@@ -50,43 +54,43 @@ struct switchercb {
 	struct switchercb * __capability	scb_caller_scb;
 
 	/*
-	 * SCB of the code we're cocalling into.
+	 * (o) SCB of the code we're cocalling into.
 	 */
 	struct switchercb * __capability	scb_target_scb;
 
 	/*
-	 * Home thread: the thread that called cosetup(2).
+	 * (h) Home thread: the thread that called cosetup(2).
 	 */
 	struct thread * __capability		scb_home_td;
 
 	/*
-	 * SCB of the guest whose code runs on this SCB's home thread.  NULL
+	 * (g) SCB of the guest whose code runs on this SCB's home thread.  NULL
 	 * or this SCB itself means that no guest runs there.
 	 */
 	struct switchercb * __capability	scb_guest_scb;
 
 	/*
-	 * SCB of the thread that runs this SCB's code, or this SCB
-	 * itself when the code is on its home thread.  While the code
-	 * waits in cocall(2) or coaccept(2), the field names the thread
-	 * that last ran it.
+	 * (r) SCB of the thread that runs this SCB's code, or this SCB itself
+	 * when the code is on its home thread.  While the code waits in
+	 * cocall(2) or coaccept(2), the field names the thread that last ran
+	 * it.
 	 */
 	struct switchercb * __capability	scb_runner_scb;
 
 	/*
-	 * Copy of switcher_target_sealcap, with which the switcher unseals
+	 * (c) Copy of switcher_target_sealcap, with which the switcher unseals
 	 * cocall targets.
 	 */
 	void * __capability			scb_target_unsealcap;
 
 	/*
-	 * Stack pointer and return address, saved on entry to the switcher.
+	 * (o) Stack pointer and return address, saved on entry to the switcher.
 	 */
 	void * __capability			scb_csp;
 	void * __capability			scb_cra;
 
 	/*
-	 * The outbuf, outlen, inbuf, and inlen arguments of cocall(2) or
+	 * (o) The outbuf, outlen, inbuf, and inlen arguments of cocall(2) or
 	 * coaccept(2).
 	 */
 	const void * __capability		scb_outbuf;
@@ -95,7 +99,7 @@ struct switchercb {
 	size_t					scb_inlen;
 
 	/*
-	 * The cookiep argument of coaccept(2): where a cocall puts the
+	 * (o) The cookiep argument of coaccept(2): where a cocall puts the
 	 * caller's cookie, or NULL.
 	 */
 	void * __capability			scb_cookiep;
